@@ -1,0 +1,6 @@
+<script setup>
+import { ArrowUpRight, ReceiptText } from 'lucide-vue-next'
+import { money, dateTime, statusNames, initials } from '../utils/format'
+defineProps({ payments: Array, employeeName: Function })
+</script>
+<template><div v-if="!payments.length" class="empty"><ReceiptText :size="32" /><h3>Пока нет платежей</h3><p>Здесь появятся чаевые ваших гостей.</p></div><div v-else class="table-wrap"><table><thead><tr><th>Сотрудник</th><th>Дата и время</th><th>Сумма</th><th>Статус</th><th class="table-last">Платёж</th></tr></thead><tbody><tr v-for="p in payments" :key="p.id"><td><div class="person"><span class="avatar small" :class="['sage','peach','lavender'][p.employeeId.length % 3]">{{ initials(employeeName(p.employeeId)) }}</span><span>{{ employeeName(p.employeeId) }}</span></div></td><td class="muted nowrap">{{ dateTime(p.createdAt) }}</td><td class="amount nowrap">{{ money(p.amount) }}</td><td><span class="status" :class="p.status"><i></i>{{ statusNames[p.status] }}</span></td><td class="table-last muted"><span class="tx-id" :title="p.id">#{{ p.id.slice(-7) }}</span><ArrowUpRight :size="14" /></td></tr></tbody></table></div></template>
