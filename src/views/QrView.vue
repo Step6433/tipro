@@ -1,14 +1,23 @@
 <script setup>
-import { computed, ref } from 'vue'
-import { Plus, QrCode, Info } from 'lucide-vue-next'
+import { ref } from 'vue'
+import { Plus, ReceiptText, Info } from 'lucide-vue-next'
 import { useAppStore } from '../stores/app'
 import { api } from '../api'
 import BaseModal from '../components/BaseModal.vue'
 import QrCard from '../components/QrCard.vue'
-const store=useAppStore(), open=ref(false), filter=ref('all'), busy=ref(false), error=ref(''), pageError=ref(''), form=ref({employeeId:'',type:'personal',label:'',bill:''})
-const list=computed(()=>store.qrs.filter(q=>filter.value==='all'||q.type===filter.value))
-function create(){form.value={employeeId:store.employees.find(e=>e.active)?.id||'',type:'personal',label:'',bill:''};error.value='';open.value=true}
-async function save(){busy.value=true;error.value='';try{await api.createQr(form.value);await store.load();open.value=false;store.notify('QR-код готов к благодарностям')}catch(e){error.value=e.message}finally{busy.value=false}}
+const store=useAppStore(),open=ref(false),busy=ref(false),error=ref(''),pageError=ref('')
+const form=ref({receiptNumber:'',billAmount:''})
+function create(){form.value={receiptNumber:'',billAmount:''};error.value='';open.value=true}
+async function save(){busy.value=true;error.value='';try{await api.createQr(form.value);await store.load();open.value=false;store.notify('Чек с QR-кодом готов')}catch(e){error.value=e.message}finally{busy.value=false}}
 async function toggle(q){pageError.value='';try{await api.toggleQr(q.id);await store.load();store.notify('Статус QR-кода обновлён')}catch(e){pageError.value=e.message}}
 </script>
-<template><div class="page-heading"><div><div class="eyebrow">КОРОТКИЙ ПУТЬ К БЛАГОДАРНОСТИ</div><h1>QR-коды<span class="heading-dot">.</span></h1><p>Один скан — и гость может сказать «спасибо».</p></div><button class="btn btn-primary" @click="create"><Plus :size="18"/>Создать QR-код</button></div><div class="info-banner"><Info :size="20"/><span>Персональный QR работает многократно. QR на чек принимает только одну успешную оплату.</span></div><div class="toolbar"><div class="tabs"><button @click="filter='all'" :class="{active:filter==='all'}">Все QR-коды <span>{{ store.qrs.length }}</span></button><button @click="filter='personal'" :class="{active:filter==='personal'}">Персональные</button><button @click="filter='receipt'" :class="{active:filter==='receipt'}">На чек</button></div><span class="muted small-text">PNG · готово к печати</span></div><p v-if="pageError" class="error-banner" role="alert">{{ pageError }}</p><div v-if="!list.length" class="panel empty"><QrCode :size="40"/><h3>Ваш первый QR-код</h3><p>Выберите сотрудника и начните принимать чаевые.</p><button class="btn btn-primary" @click="create">Создать QR-код</button></div><div class="qr-grid"><QrCard v-for="q in list" :key="q.id" :qr="q" :employee-name="store.employeeName(q.employeeId)" @toggle="toggle"/></div><BaseModal v-if="open" title="Новый QR-код" subtitle="Маленькая деталь для большого спасибо." @close="!busy&&(open=false)"><div v-if="!store.employees.some(e=>e.active)" class="empty compact"><p>Сначала добавьте активного сотрудника.</p><RouterLink to="/app/employees" class="btn btn-primary">Перейти к команде</RouterLink></div><form v-else class="form-stack" @submit.prevent="save"><label>Сотрудник<select v-model="form.employeeId" required><option v-for="e in store.employees.filter(e=>e.active)" :key="e.id" :value="e.id">{{ e.name }}</option></select></label><label>Тип QR-кода<select v-model="form.type"><option value="personal">Персональный · многоразовый</option><option value="receipt">На чек · одноразовый</option></select></label><label>Название<input v-model="form.label" maxlength="80" :placeholder="form.type==='receipt'?'Например, чек № 1043':'Например, карточка сотрудника'"></label><label v-if="form.type==='receipt'">Сумма чека, ₽<input v-model="form.bill" type="number" min="1" max="10000000" required placeholder="2800"></label><p class="muted small-text">Ссылка будет работать в этом браузере. Для сканирования с другого устройства понадобится общий бэкенд.</p><p v-if="error" class="error-text" role="alert">{{ error }}</p><button class="btn btn-primary" :disabled="busy">{{ busy?'Создаём…':'Создать QR-код' }}</button></form></BaseModal></template>
+<template>
+  <div class="page-heading"><div><h1>QR на чеке</h1><p>Гость сканирует код с чека, открывает ресторан и выбирает сотрудника.</p></div><button class="btn btn-primary" @click="create"><Plus :size="18"/>Создать чек с QR</button></div>
+  <div class="info-banner"><Info :size="20"/><span>Создайте демонстрационный предчек и скачайте его в PNG или распечатайте. В действующей кассе платёжная ссылка должна добавляться в шаблон чека через кассовую систему. Чаевые оплачиваются отдельно от заказа.</span></div>
+  <p v-if="pageError" class="error-banner" role="alert">{{ pageError }}</p>
+  <div v-if="!store.qrs.length" class="panel empty"><ReceiptText :size="36"/><h3>Первый чек с QR-кодом</h3><p>Укажите номер и сумму заказа. Код будет расположен внизу чека и откроет страницу вашего ресторана.</p><button class="btn btn-outline" @click="create">Создать чек с QR</button></div>
+  <div class="qr-grid"><QrCard v-for="q in store.qrs" :key="q.id" :qr="q" :restaurant-name="store.merchant?.name" @toggle="toggle"/></div>
+  <BaseModal v-if="open" title="Чек с QR-кодом" subtitle="Макет для демонстрации, без подключения к кассе." @close="!busy&&(open=false)">
+    <form class="form-stack" @submit.prevent="save"><label>Номер чека<input v-model="form.receiptNumber" required maxlength="40" placeholder="Например, 1042"></label><label>Сумма заказа, ₽<input v-model="form.billAmount" type="number" required min="1" max="10000000" step="1" inputmode="numeric" placeholder="2800"></label><p class="muted small-text">QR ведёт на страницу «{{ store.merchant?.name }}». Гость выбирает сотрудника и сумму чаевых. Этот макет не является кассовым чеком.</p><p v-if="error" class="error-text" role="alert">{{ error }}</p><button class="btn btn-primary" :disabled="busy">{{ busy?'Создаём…':'Создать чек' }}</button></form>
+  </BaseModal>
+</template>

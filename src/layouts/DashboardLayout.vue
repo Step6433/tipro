@@ -1,16 +1,43 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, UsersRound, QrCode, ArrowLeftRight, ShieldCheck, LogOut, ChevronDown, ArrowUpRight, Menu, X, CircleHelp, Sparkles, ArrowRight, Bell } from 'lucide-vue-next'
+import { LayoutDashboard, UsersRound, QrCode, ArrowLeftRight, ShieldCheck, LogOut, Menu, X, Target } from 'lucide-vue-next'
 import BrandLogo from '../components/BrandLogo.vue'
 import { useAppStore } from '../stores/app'
 import { initials } from '../utils/format'
-const store = useAppStore(), route = useRoute(), router = useRouter(), mobile = ref(false), switching = ref(false), switchError = ref('')
-const links = [{ to: '/app', label: 'Обзор', icon: LayoutDashboard }, { to: '/app/employees', label: 'Команда', icon: UsersRound }, { to: '/app/qr', label: 'QR-коды', icon: QrCode }, { to: '/app/payments', label: 'История платежей', icon: ArrowLeftRight }]
-function refresh() { store.load().catch(() => {}) }
-onMounted(() => { refresh(); window.addEventListener('focus', refresh) })
-onUnmounted(() => window.removeEventListener('focus', refresh))
-async function admin() { switching.value = true; switchError.value = ''; try { await store.demo(store.session.role === 'admin' ? 'merchant' : 'admin'); router.push(store.session.role === 'admin' ? '/app/admin' : '/app'); mobile.value = false } catch(e) { switchError.value = e.message } finally { switching.value = false } }
-async function logout() { await store.logout(); router.push('/') }
+import { roleNames, homeForRole } from '../utils/roles'
+const store=useAppStore(),route=useRoute(),router=useRouter(),mobile=ref(false)
+const links=computed(()=>store.session?.role==='employee'?[
+  {to:'/app/me',label:'Моя статистика',icon:LayoutDashboard},{to:'/app/goals',label:'Мои цели',icon:Target},{to:'/app/payments',label:'Мои платежи',icon:ArrowLeftRight},
+]:store.session?.role==='admin'?[
+  {to:'/app/admin',label:'Платформа',icon:ShieldCheck},
+]:[
+  {to:'/app',label:'Обзор',icon:LayoutDashboard},{to:'/app/employees',label:'Команда',icon:UsersRound},{to:'/app/qr',label:'QR на чеке',icon:QrCode},{to:'/app/payments',label:'Платежи',icon:ArrowLeftRight},
+])
+async function refresh(){
+  try{
+    await store.refreshSession()
+    if(!store.session){router.replace('/login');return}
+    if(route.meta.roles&&!route.meta.roles.includes(store.session.role))router.replace(homeForRole(store.session.role))
+  }catch{/* The store displays the loading error and retry control. */}
+}
+onMounted(()=>{if(!store.user)refresh();window.addEventListener('focus',refresh);window.addEventListener('storage',refresh)})
+onUnmounted(()=>{window.removeEventListener('focus',refresh);window.removeEventListener('storage',refresh)})
+async function logout(){await store.logout();router.push('/login')}
 </script>
-<template><div class="dashboard-shell"><button v-if="mobile" class="sidebar-overlay" @click="mobile=false" aria-label="Закрыть меню"></button><aside class="sidebar" :class="{ open: mobile }"><div class="sidebar-brand"><BrandLogo /><button class="icon-btn mobile-only" @click="mobile=false" aria-label="Закрыть меню"><X :size="20" /></button></div><div class="workspace"><span class="workspace-icon">ВC</span><div><strong>{{ store.merchant?.name || 'Ресторан' }}</strong><span>Кабинет ресторана</span></div><ChevronDown :size="15" /></div><div class="nav-label">РАБОЧЕЕ ПРОСТРАНСТВО</div><nav><RouterLink v-for="link in links" :key="link.to" :to="link.to" :class="{ active: route.path === link.to }" @click="mobile=false"><component :is="link.icon" :size="19" />{{ link.label }}<span v-if="link.to==='/app/employees'" class="nav-count">{{ store.employees.length }}</span></RouterLink><RouterLink v-if="store.session?.role==='admin'" to="/app/admin" :class="{ active: route.path==='/app/admin' }" @click="mobile=false"><ShieldCheck :size="19" />Администрирование</RouterLink></nav><div class="sidebar-bottom"><div class="demo-side"><span class="demo-icon"><Sparkles :size="18" /></span><strong>Начните с команды</strong><p>Добавьте сотрудников<br>и создайте первые QR-коды.</p><RouterLink to="/app/employees" @click="mobile=false">Добавить сотрудника<ArrowUpRight :size="15" /></RouterLink></div><button class="sidebar-utility" :disabled="switching" @click="admin"><ShieldCheck :size="18" />{{ store.session?.role==='admin' ? 'Режим ресторана' : 'Режим администратора' }}</button><p v-if="switchError" class="error-text">{{ switchError }}</p><RouterLink to="/" class="sidebar-utility"><CircleHelp :size="18" />О сервисе<ArrowUpRight :size="14" /></RouterLink><div class="sidebar-profile"><span class="avatar sage small">{{ initials(store.merchant?.name) }}</span><div><strong>{{ store.session?.role==='admin' ? 'Администратор' : 'Мой ресторан' }}</strong><span>Демонстрационный аккаунт</span></div><button @click="logout" class="icon-btn" aria-label="Выйти"><LogOut :size="17" /></button></div></div></aside><div class="dashboard-body"><header class="topbar"><div class="breadcrumb"><button class="icon-btn mobile-only" @click="mobile=true" aria-label="Открыть меню"><Menu :size="22" /></button><span>Личный кабинет</span><span class="slash">/</span><strong>{{ route.meta.title }}</strong></div><div class="topbar-right"><span class="demo-pill"><i></i>Демо-режим</span><button class="icon-btn" @click="store.notify('Все события актуальны. Новых уведомлений нет. Это деморежим.')" aria-label="Уведомления"><Bell :size="20" /></button><span class="avatar sage small">ВС</span></div></header><main class="dashboard-content"><div v-if="store.error" class="error-banner" role="alert">{{ store.error }}<button class="btn btn-small" @click="store.load().catch(()=>{})">Повторить</button></div><div v-if="store.loading && !store.merchant" class="page-loading"><span class="spinner"></span>Загружаем ваш ресторан…</div><RouterView v-else /></main><footer class="dashboard-footer"><span>© {{ new Date().getFullYear() }} Tipro. Создано для благодарности.</span><span><span class="live-dot"></span>Демонстрационный прототип</span></footer></div></div></template>
+<template>
+  <div class="dashboard-shell">
+    <button v-if="mobile" class="sidebar-overlay" @click="mobile=false" aria-label="Закрыть меню"></button>
+    <aside class="sidebar" :class="{open:mobile}">
+      <div class="sidebar-brand"><BrandLogo/><button class="icon-btn mobile-only" @click="mobile=false" aria-label="Закрыть меню"><X :size="20"/></button></div>
+      <div class="workspace"><span class="workspace-icon">{{ initials(store.merchant?.name || 'Tipro') }}</span><div><strong>{{ store.merchant?.name || 'Tipro' }}</strong><span>{{ roleNames[store.session?.role] }}</span></div></div>
+      <nav><RouterLink v-for="link in links" :key="link.to" :to="link.to" :class="{active:route.path===link.to}" @click="mobile=false"><component :is="link.icon" :size="18"/>{{ link.label }}</RouterLink></nav>
+      <div class="sidebar-bottom"><div class="sidebar-profile"><span class="avatar small">{{ initials(store.user?.name) }}</span><div><strong>{{ store.user?.name }}</strong><span>{{ store.user?.email }}</span></div></div><button class="sidebar-utility" @click="logout"><LogOut :size="17"/>Выйти из аккаунта</button></div>
+    </aside>
+    <div class="dashboard-body">
+      <header class="topbar"><div class="breadcrumb"><button class="icon-btn mobile-only" @click="mobile=true" aria-label="Открыть меню"><Menu :size="21"/></button><span>{{ route.meta.title }}</span></div><span class="role-chip">{{ roleNames[store.session?.role] }}</span></header>
+      <main class="dashboard-content"><div v-if="store.error" class="error-banner" role="alert">{{ store.error }}<button class="btn btn-outline btn-small" @click="refresh">Повторить</button></div><div v-if="store.loading&&!store.user" class="page-loading"><span class="spinner"></span>Загрузка…</div><RouterView v-else/></main>
+      <footer class="dashboard-footer"><span>Tipro</span><span>Локальный прототип · без реальных списаний</span></footer>
+    </div>
+  </div>
+</template>
