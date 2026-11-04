@@ -1,0 +1,10 @@
+<script setup>
+import { ref, watch } from 'vue'
+import { api } from '../api'
+import { useAppStore } from '../stores/app'
+import { languages } from '../i18n'
+const store=useAppStore(),form=ref({}),busy=ref(false),error=ref('')
+watch(()=>store.merchant,m=>{if(m)form.value={name:m.name,description:m.location||'',language:languages[m.language]?m.language:'en',percentages:m.tipPercentages.join(', ')}},{immediate:true})
+async function save(){busy.value=true;error.value='';try{const tipPercentages=form.value.percentages.split(',').map(s=>Number(s.trim()));await api.settings(store.merchant.id,{name:form.value.name,description:form.value.description,language:form.value.language,tipPercentages,paymentMethods:['demo']});await store.load();store.notify('Настройки ресторана сохранены')}catch(e){error.value=e.message}finally{busy.value=false}}
+</script>
+<template><div class="page-heading"><div><h1>{{ $t('Настройки ресторана') }}</h1><p>{{ $t('Параметры ресторана и язык гостевой страницы') }}</p></div></div><section class="panel settings-panel"><form class="form-stack" @submit.prevent="save"><label>{{ $t('Название') }}<input v-model="form.name" required minlength="2" maxlength="100"></label><label>{{ $t('Описание или адрес') }}<input v-model="form.description" maxlength="2000"></label><label>{{ $t('Язык страницы ресторана') }}<select v-model="form.language"><option v-for="(name,code) in languages" :key="code" :value="code">{{ name }}</option></select></label><p class="muted small-text">{{ $t('Язык для гостей без собственного выбора. Язык вашего кабинета меняется переключателем вверху.') }}</p><label>{{ $t('Предлагаемые проценты чаевых') }}<input v-model="form.percentages" required placeholder="5, 10, 15"></label><p class="muted small-text">{{ $t('Платёжный метод: демонстрационный, без списаний.') }}</p><p v-if="error" class="error-text" role="alert">{{ $t(error) }}</p><button class="btn btn-primary" :disabled="busy">{{ busy?$t('Сохраняем…'):$t('Сохранить настройки') }}</button></form></section></template>

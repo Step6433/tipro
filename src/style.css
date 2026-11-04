@@ -494,3 +494,14 @@ select { cursor: pointer; }
   body.printing-receipt .receipt-print-sheet { width: 72mm; max-width: 72mm; padding: 3mm; border: 0; margin: 0 auto; break-inside: avoid; }
   body.printing-receipt .receipt-print-sheet img { width: 45mm; }
 }
+.settings-panel { max-width: 620px; padding: 28px; }
+.settings-panel .form-stack { margin-top: 0; }
+@media(max-width:760px) { .settings-panel { padding: 22px; } }
+
+.language-switch { display: inline-flex; align-items: center; flex-shrink: 0; }
+.language-switch select { max-width: 130px; padding: 7px 26px 7px 10px; border: 1px solid var(--line, #e1e6df); border-radius: 8px; background: #fff; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+.landing-header nav, .auth-header, .pay-header { gap: 14px; flex-wrap: wrap; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+@media (max-width: 600px) { .topbar { flex-wrap: wrap; height: auto; gap: 8px; padding-top: 10px; padding-bottom: 10px; } .pay-header > span { width: 100%; } }
+
+.topbar > .language-switch { margin-left: auto; }

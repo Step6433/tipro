@@ -32,7 +32,7 @@ export async function receiptPng({ restaurantName, qr, url }) {
   function divider(){ctx.beginPath();ctx.strokeStyle='#adb3ac';ctx.setLineDash([5,5]);ctx.moveTo(40,y);ctx.lineTo(600,y);ctx.stroke();ctx.setLineDash([]);y+=40}
   divider()
   ctx.textAlign='left';ctx.font='21px sans-serif';ctx.fillText('Сумма заказа',45,y)
-  ctx.textAlign='right';ctx.font='bold 25px sans-serif';ctx.fillText(qr.receipt?money(qr.receipt.billAmount):'Не указана',595,y);y+=45
+  ctx.textAlign='right';ctx.font='bold 25px sans-serif';ctx.fillText(qr.receipt?money(qr.receipt.billAmount,qr.currency):'Не указана',595,y);y+=45
   divider()
   ctx.textAlign='center';ctx.font='bold 24px sans-serif';ctx.fillText('Оставить чаевые',320,y);y+=40
   ctx.font='18px sans-serif';ctx.fillText('Сканируйте QR и выберите сотрудника',320,y);y+=20

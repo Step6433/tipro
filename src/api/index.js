@@ -1,3 +1,3 @@
-// Replace this adapter with REST methods when FastAPI is ready. Components use only this contract.
-import { mockApi } from './mock.js'
-export const api = mockApi
+// All production screens use FastAPI. The original mock remains only for isolated legacy tests.
+import { restApi } from './rest'
+export const api = restApi

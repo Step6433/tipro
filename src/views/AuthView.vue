@@ -1,5 +1,6 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import LanguageSwitcher from '../components/LanguageSwitcher.vue'
+import { computed, reactive, ref, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Eye, EyeOff } from 'lucide-vue-next'
 import BrandLogo from '../components/BrandLogo.vue'
@@ -10,6 +11,8 @@ const route=useRoute(), router=useRouter(), store=useAppStore()
 const isRegister=computed(()=>route.path==='/register')
 const form=reactive({role:'merchant',name:'',restaurantName:'',email:'',password:'',confirm:'',invite:''})
 const error=ref(''), busy=ref(false), show=ref(false), invitation=ref(null), inviteError=ref(''), checkingInvite=ref(false)
+const capabilities=ref({adminRegistration:false})
+onMounted(async()=>{try{capabilities.value=await api.capabilities()}catch(e){error.value=e.message}})
 let checkVersion=0
 function tokenFrom(value) {
   const text=value.trim()
@@ -45,27 +48,27 @@ async function submit(){
 </script>
 <template>
   <main class="auth-page">
-    <header class="auth-header"><BrandLogo/><RouterLink to="/" class="text-link"><ArrowLeft :size="15"/>На главную</RouterLink></header>
+    <header class="auth-header"><BrandLogo/><LanguageSwitcher/><RouterLink to="/" class="text-link"><ArrowLeft :size="15"/>{{ $t('На главную') }}</RouterLink></header>
     <section class="auth-card">
-      <h1>{{ isRegister?'Создать аккаунт':'Вход в Tipro' }}</h1><p class="muted">{{ isRegister?'Выберите роль и заполните данные.':'Введите email и пароль своего аккаунта.' }}</p>
+      <h1>{{ isRegister?$t('Создать аккаунт'):$t('Вход в Tipro') }}</h1><p class="muted">{{ isRegister?$t('Выберите роль и заполните данные.'):$t('Введите email и пароль своего аккаунта.') }}</p>
       <form class="form-stack" @submit.prevent="submit">
         <template v-if="isRegister">
-          <label>Роль<select v-model="form.role"><option value="employee">Сотрудник</option><option value="merchant">Администратор ресторана</option><option value="admin">Администратор платформы</option></select></label>
-          <div class="role-description" v-if="form.role==='employee'">Код выдаёт администратор вашего ресторана. Это приглашение в команду, а не QR-код с чека.</div>
-          <div class="role-description" v-else-if="form.role==='merchant'">Команда, QR-коды и вся статистика вашего ресторана.</div>
-          <div class="role-description" v-else>Обзор всех ресторанов и платежей. Регистрация этой роли открыта только в учебном прототипе.</div>
-          <template v-if="form.role==='employee'"><div class="invitation-help"><strong>Где взять код?</strong><ol><li>Администратор входит в аккаунт с ролью «Администратор ресторана».</li><li>Открывает «Команда», добавляет вас и нажимает «Приглашение сотрудника».</li><li>Передаёт вам код или ссылку. При открытии ссылки поле заполнится автоматически.</li></ol><p>Если аккаунта ресторана ещё нет, <RouterLink to="/register?role=merchant">сначала зарегистрируйте ресторан</RouterLink>. Если он уже есть — <RouterLink :to="{path:'/login',query:{redirect:'/app/employees'}}">войдите как администратор ресторана</RouterLink>.</p></div><label>Код или ссылка приглашения<input v-model="form.invite" required placeholder="Вставьте ссылку или код приглашения" @input="invitation=null;inviteError='';checkingInvite=false;checkVersion++" @blur="checkInvite"></label><p v-if="checkingInvite" class="muted small-text">Проверяем приглашение…</p><p v-if="invitation" class="invite-details">{{ invitation.restaurantName }} · {{ invitation.name }} · {{ invitation.position }}</p><p v-if="inviteError" class="error-text" role="alert">{{ inviteError }}</p></template>
-          <label>Ваше имя<input v-model="form.name" required minlength="2" maxlength="100" autocomplete="name" placeholder="Имя и фамилия"></label>
-          <label v-if="form.role==='merchant'">Название ресторана<input v-model="form.restaurantName" required minlength="2" maxlength="100" autocomplete="organization" placeholder="Название заведения"></label>
+          <label>{{ $t('Роль') }}<select v-model="form.role"><option value="employee">{{ $t('Сотрудник') }}</option><option value="merchant">{{ $t('Администратор ресторана') }}</option><option value="admin" :disabled="!capabilities.adminRegistration">{{ $t('Администратор платформы') }}</option></select></label>
+          <div class="role-description" v-if="form.role==='employee'">{{ $t('Код выдаёт администратор вашего ресторана. Это приглашение в команду, а не QR-код ресторана.') }}</div>
+          <div class="role-description" v-else-if="form.role==='merchant'">{{ $t('Команда, QR-коды и вся статистика вашего ресторана.') }}</div>
+          <div class="role-description" v-else>{{ $t('Обзор всех ресторанов и платежей.') }} {{ capabilities.adminRegistration?$t('Самостоятельная регистрация разрешена в этой демонстрации.'):$t('Для входа используйте выданный аккаунт администратора платформы. Самостоятельная регистрация закрыта.') }}</div>
+          <template v-if="form.role==='employee'"><div class="invitation-help"><strong>{{ $t('Где взять код?') }}</strong><ol><li>{{ $t('Администратор входит в аккаунт с ролью «Администратор ресторана».') }}</li><li>{{ $t('Открывает «Команда», добавляет вас и нажимает «Приглашение сотрудника».') }}</li><li>{{ $t('Передаёт вам код или ссылку. При открытии ссылки поле заполнится автоматически.') }}</li></ol><p>{{ $t('Если аккаунта ресторана ещё нет,') }} <RouterLink to="/register?role=merchant">{{ $t('сначала зарегистрируйте ресторан') }}</RouterLink>{{ $t('. Если он уже есть —') }} <RouterLink :to="{path:'/login',query:{redirect:'/app/employees'}}">{{ $t('войдите как администратор ресторана') }}</RouterLink>.</p></div><label>{{ $t('Код или ссылка приглашения') }}<input v-model="form.invite" required :placeholder="$t('Вставьте ссылку или код приглашения')" @input="invitation=null;inviteError='';checkingInvite=false;checkVersion++" @blur="checkInvite"></label><p v-if="checkingInvite" class="muted small-text">{{ $t('Проверяем приглашение…') }}</p><p v-if="invitation" class="invite-details">{{ invitation.restaurantName }} · {{ invitation.name }} · {{ $t(invitation.position) }}</p><p v-if="inviteError" class="error-text" role="alert">{{ $t(inviteError) }}</p></template>
+          <label>{{ $t('Ваше имя') }}<input v-model="form.name" required minlength="2" maxlength="100" autocomplete="name" :placeholder="$t('Имя и фамилия')"></label>
+          <label v-if="form.role==='merchant'">{{ $t('Название ресторана') }}<input v-model="form.restaurantName" required minlength="2" maxlength="100" autocomplete="organization" :placeholder="$t('Название заведения')"></label>
         </template>
-        <label>Email<input v-model="form.email" required type="email" autocomplete="email" placeholder="name@example.ru"></label>
-        <label>Пароль<div class="password-input"><input v-model="form.password" required :minlength="isRegister?8:1" :type="show?'text':'password'" :autocomplete="isRegister?'new-password':'current-password'" :placeholder="isRegister?'Минимум 8 символов':'Ваш пароль'"><button class="icon-btn" type="button" @click="show=!show" :aria-label="show?'Скрыть пароль':'Показать пароль'"><component :is="show?EyeOff:Eye" :size="18"/></button></div></label>
-        <label v-if="isRegister">Повторите пароль<input v-model="form.confirm" required minlength="8" type="password" autocomplete="new-password" placeholder="Повторите пароль"></label>
-        <p v-if="error" class="error-text" role="alert">{{ error }}</p>
-        <button class="btn btn-primary full" :disabled="busy">{{ busy?'Подождите…':isRegister?'Создать аккаунт':'Войти' }}</button>
+        <label>{{ isRegister?'Email':$t('Email или логин') }}<input v-model="form.email" required :type="isRegister?'email':'text'" autocomplete="username" placeholder="name@example.ru"></label>
+        <label>{{ $t('Пароль') }}<div class="password-input"><input v-model="form.password" required :minlength="isRegister?8:1" :type="show?'text':'password'" :autocomplete="isRegister?'new-password':'current-password'" :placeholder="isRegister?$t('Минимум 8 символов'):$t('Ваш пароль')"><button class="icon-btn" type="button" @click="show=!show" :aria-label="show?$t('Скрыть пароль'):$t('Показать пароль')"><component :is="show?EyeOff:Eye" :size="18"/></button></div></label>
+        <label v-if="isRegister">{{ $t('Повторите пароль') }}<input v-model="form.confirm" required minlength="8" type="password" autocomplete="new-password" :placeholder="$t('Повторите пароль')"></label>
+        <p v-if="error" class="error-text" role="alert">{{ $t(error) }}</p>
+        <button class="btn btn-primary full" :disabled="busy||(isRegister&&form.role==='admin'&&!capabilities.adminRegistration)">{{ busy?$t('Подождите…'):isRegister?$t('Создать аккаунт'):$t('Войти') }}</button>
       </form>
-      <p class="auth-switch">{{ isRegister?'Уже есть аккаунт?':'Нет аккаунта?' }} <RouterLink :to="isRegister?'/login':'/register'">{{ isRegister?'Войти':'Зарегистрироваться' }}</RouterLink></p>
-      <p class="auth-note">Локальный прототип: используйте тестовые данные. Аккаунт гостя для оплаты не нужен.</p>
+      <p class="auth-switch">{{ isRegister?$t('Уже есть аккаунт?'):$t('Нет аккаунта?') }} <RouterLink :to="isRegister?'/login':'/register'">{{ isRegister?$t('Войти'):$t('Зарегистрироваться') }}</RouterLink></p>
+      <p class="auth-note">{{ $t('Используйте тестовые данные. Аккаунт гостя для оплаты не нужен.') }}</p>
     </section>
   </main>
 </template>
