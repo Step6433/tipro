@@ -19,12 +19,15 @@ router=APIRouter(tags=['QR links'])
 
 async def resolve_qr(db, token, lock=False):
     nonce, exp, signature = parse_qr_token(token)
-    stmt=select(QrLink).where(QrLink.nonce==nonce,QrLink.token_version=='v1')
+    stmt=select(QrLink).where(QrLink.nonce==nonce,QrLink.token_version=='v2')
     q=await db.scalar(stmt.with_for_update() if lock else stmt)
-    if not q or not q.active or (q.expires_at is not None and q.expires_at<=utcnow()) or (int(exp)!=0 and int(exp)<=utcnow().timestamp()) or q.exp!=exp or not hmac.compare_digest(q.signature,signature):
+    if not q or not q.active or q.used_at or not q.employee_id or not q.expires_at or q.expires_at<=utcnow() or int(exp)<=utcnow().timestamp() or q.exp!=exp or int(exp)!=int(q.expires_at.timestamp()) or not hmac.compare_digest(q.signature,signature):
         raise ApiError('QR-код недействителен, отключён или просрочен.','INVALID_QR',404)
     m=await db.get(Merchant,q.merchant_id)
     if not m or m.status.upper()!='ACTIVE':raise ApiError('Ресторан недоступен.','INVALID_QR',404)
+    e=await db.get(Employee,q.employee_id)
+    if not e or not e.active or e.position!='worker' or e.merchant_id!=m.merchant_id:
+        raise ApiError('Сотрудник недоступен. Создайте новый QR-код.','INVALID_QR',404)
     return q,m
 
 def qr_url(q):
@@ -44,9 +47,9 @@ async def create_qr(body: QrInput,db: Db,user: User):
     if body.employee_id:
         e=await db.get(Employee,body.employee_id)
         if not e or e.merchant_id!=m.merchant_id or e.position!='worker' or not e.active:raise ApiError('Сотрудник не принадлежит ресторану.','INVALID_EMPLOYEE',400)
-    token=str(secrets.randbits(256));expires=utcnow()+timedelta(days=body.expires_in_days) if body.expires_in_days else None
-    exp=str(int(expires.timestamp())) if expires else '0'
-    q=QrLink(merchant_id=m.merchant_id,employee_id=body.employee_id,receipt_id=0,receipt_number=body.receipt_number,bill_amount=bill,currency=currency,nonce=token,exp=exp,signature=sign_qr(token,exp),expires_at=expires,active=True,token_version='v1',label=body.label or 'QR ресторана')
+    token=str(secrets.randbits(256));created=utcnow().replace(microsecond=0);expires=created+timedelta(hours=24)
+    exp=str(int(expires.timestamp()))
+    q=QrLink(merchant_id=m.merchant_id,employee_id=body.employee_id,receipt_id=0,receipt_number=body.receipt_number,bill_amount=bill,currency=currency,nonce=token,exp=exp,signature=sign_qr(token,exp),expires_at=expires,active=True,token_version='v2',created_at=created,label=body.label or 'QR сотрудника')
     db.add(q);await db.flush();result={**qr_view(q),'url':qr_url(q)};await db.commit();return result
 
 @router.patch('/qrs/{token}')
@@ -55,7 +58,9 @@ async def update_qr(token: str,body: QrUpdate,db: Db,user: User):
     q=await db.scalar(select(QrLink).where(QrLink.nonce==nonce,QrLink.exp==exp,QrLink.signature==signature).with_for_update())
     if not q:raise ApiError('QR-код не найден.','NOT_FOUND',404)
     require_merchant(user,q.merchant_id)
-    if q.token_version!='v1':raise ApiError('Создайте новый QR: старый формат не поддерживается.')
+    if q.token_version!='v2':raise ApiError('Создайте новый QR: старый формат не поддерживается.')
+    if body.active and (q.used_at or not q.expires_at or q.expires_at<=utcnow()):
+        raise ApiError('Использованный или просроченный QR нельзя включить повторно.','CONFLICT',409)
     q.active=body.active;await db.commit();return qr_view(q)
 
 @router.get('/qrs/{token}/image')
@@ -64,6 +69,8 @@ async def qr_image(token: str,db: Db,user: User):
     q=await db.scalar(select(QrLink).where(QrLink.nonce==nonce,QrLink.exp==exp,QrLink.signature==signature).with_for_update())
     if not q:raise ApiError('QR-код не найден.','NOT_FOUND',404)
     require_merchant(user,q.merchant_id)
+    if q.token_version!='v2' or not q.active or q.used_at or not q.expires_at or q.expires_at<=utcnow():
+        raise ApiError('Этот QR больше не действует. Создайте новый код.','INVALID_QR',404)
     buffer=io.BytesIO();qrcode.make(qr_url(q)).save(buffer,format='PNG')
     return Response(buffer.getvalue(),media_type='image/png',headers={'Content-Disposition':f'attachment; filename="tipro-qr-{q.qr_id}.png"'})
 
@@ -75,7 +82,7 @@ async def public_qr(db,token,merchant_id=None):
     employees=list((await db.scalars(select(Employee).where(*conditions).order_by(Employee.name))).all())
     ids=[e.employee_id for e in employees]
     goals=list((await db.scalars(select(Goal).where(Goal.employee_id.in_(ids),Goal.active.is_(True)))).all()) if ids else []
-    public_merchant=merchant_view(m);public_merchant.pop('email',None)
+    public_merchant=merchant_view(m);public_merchant.pop('email',None);public_merchant.pop('approvedBy',None);public_merchant.pop('approvedAt',None)
     return {'qr':qr_view(q),'merchant':public_merchant,'employees':[employee_view(e,goals) for e in employees],'demoControls':get_settings().allow_demo_controls}
 
 @router.get('/public/qrs/{token}')

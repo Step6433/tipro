@@ -16,10 +16,10 @@ async def export(args):
     from sqlalchemy.engine import make_url
     from app.config import get_settings
     url = make_url(get_settings().database_url)
-    binary = Path(args.bin_dir) / 'pg_dump' if args.bin_dir else None
+    binary = Path(args.bin_dir) / ('pg_dump.exe' if os.name=='nt' else 'pg_dump') if args.bin_dir else None
     if binary is None:
         installed = shutil.which('pg_dump')
-        binary = Path(installed) if installed else Path('/private/tmp/tipro-postgres18/bin/pg_dump')
+        binary = Path(installed) if installed else (Path(os.environ.get('ProgramFiles', 'C:/Program Files')) / 'PostgreSQL/18/bin/pg_dump.exe' if os.name=='nt' else Path('/private/tmp/tipro-postgres18/bin/pg_dump'))
     if not binary.is_file():
         raise RuntimeError('pg_dump not found; pass --bin-dir or set TIPRO_PG_BIN.')
     conn = await asyncpg.connect(host=url.host, port=url.port or 5432, user=url.username,

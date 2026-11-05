@@ -46,11 +46,12 @@ async def register(body: Register, response: Response, db: Db):
         if body.role == 'merchant':
             if not body.restaurant_name:
                 raise ApiError('Укажите название ресторана.')
-            merchant = Merchant(name=body.restaurant_name, status='ACTIVE', contact_email=email)
+            merchant = Merchant(name=body.restaurant_name, status='PENDING', contact_email=email)
             db.add(merchant); await db.flush()
         user = Employee(name=body.name, merchant_id=merchant.merchant_id if merchant else None, position='manager', platform_admin=body.role == 'admin', title='Администратор', login=email, auth_email=email, password_hash=hashed, active=True, payment_details='')
         db.add(user); await db.flush()
     result = await issue_session(db, user)
+    result['session'].update(await approval_details(db, user))
     await db.commit(); set_cookie(response, result['accessToken'])
     return result
 
@@ -62,15 +63,20 @@ async def login(body: Login, response: Response, db: Db):
         raise ApiError('Неверный email, пароль или аккаунт отключён.', 'UNAUTHORIZED', 401)
     if user.merchant_id and not user.platform_admin:
         m = await db.get(Merchant, user.merchant_id)
-        if not m or m.status.upper() != 'ACTIVE':
+        if not m or (m.status.upper() != 'ACTIVE' and not (m.status.upper() == 'PENDING' and role_of(user) == 'merchant')):
             raise ApiError('Ресторан недоступен.', 'UNAUTHORIZED', 403)
     result = await issue_session(db, user)
+    result['session'].update(await approval_details(db, user))
     await db.commit(); set_cookie(response, result['accessToken'])
     return result
 
+async def approval_details(db, user):
+    merchant = await db.get(Merchant, user.merchant_id) if user.merchant_id else None
+    return {'merchantStatus': merchant.status.upper() if merchant else None, 'merchantName': merchant.name if merchant else None}
+
 @router.get('/me')
-async def me(user: User):
-    return {'session': session_view(user), 'user': user_view(user)}
+async def me(user: User, db: Db):
+    return {'session': {**session_view(user), **await approval_details(db, user)}, 'user': user_view(user)}
 
 @router.post('/logout', status_code=204)
 async def logout(request: Request, response: Response, user: User, db: Db):

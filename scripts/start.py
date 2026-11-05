@@ -1,7 +1,6 @@
 """One local launcher for PostgreSQL, migrations, FastAPI and Vite."""
 import argparse
 import asyncio
-import fcntl
 import json
 import ipaddress
 import os
@@ -18,7 +17,8 @@ import webbrowser
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / 'backend'
-PYTHON = BACKEND / '.venv/bin/python'
+WINDOWS = os.name == 'nt'
+PYTHON = BACKEND / '.venv' / ('Scripts/python.exe' if WINDOWS else 'bin/python')
 CHILDREN = []
 sys.path.insert(0, str(BACKEND))
 
@@ -29,7 +29,8 @@ def say(message):
     print(message, flush=True)
 
 def start(command, cwd=ROOT):
-    child = subprocess.Popen(list(map(str, command)), cwd=cwd, start_new_session=True)
+    options = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {'start_new_session': True}
+    child = subprocess.Popen(list(map(str, command)), cwd=cwd, **options)
     CHILDREN.append(child)
     return child
 
@@ -44,7 +45,11 @@ def stop_children():
     # Only stop processes created by this launcher; keep PostgreSQL and existing servers running.
     for child in reversed(CHILDREN):
         try:
-            os.killpg(child.pid, signal.SIGTERM)
+            if WINDOWS:
+                if child.poll() is None:
+                    subprocess.run(['taskkill', '/PID', str(child.pid), '/T', '/F'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                os.killpg(child.pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
     for child in reversed(CHILDREN):
@@ -52,7 +57,10 @@ def stop_children():
             child.wait(timeout=5)
         except subprocess.TimeoutExpired:
             try:
-                os.killpg(child.pid, signal.SIGKILL)
+                if WINDOWS:
+                    child.kill()
+                else:
+                    os.killpg(child.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
             child.wait()
@@ -109,17 +117,19 @@ async def database_ready(settings):
         return False
 
 def postgres_bin():
-    data_version = (BACKEND / '.runtime/pgdata/PG_VERSION').read_text().strip()
+    version_file = BACKEND / '.runtime/pgdata/PG_VERSION'
+    data_version = version_file.read_text().strip() if version_file.exists() else '18'
     candidates = [os.environ.get('TIPRO_PG_BIN'), '/private/tmp/tipro-postgres18/bin',
-                  '/opt/homebrew/opt/postgresql@18/bin', '/usr/local/opt/postgresql@18/bin']
+                  '/opt/homebrew/opt/postgresql@18/bin', '/usr/local/opt/postgresql@18/bin',
+                  str(Path(os.environ.get('ProgramFiles', 'C:/Program Files')) / 'PostgreSQL' / data_version / 'bin')]
     pg_ctl = shutil.which('pg_ctl')
     if pg_ctl:
         candidates.append(str(Path(pg_ctl).parent))
     for candidate in filter(None, candidates):
         directory = Path(candidate)
-        if not all((directory / name).is_file() for name in ('postgres', 'pg_ctl', 'initdb')):
+        if not all((directory / (name + '.exe' if WINDOWS else name)).is_file() for name in ('postgres', 'pg_ctl', 'initdb')):
             continue
-        version = subprocess.run([str(directory / 'postgres'), '--version'], capture_output=True, text=True)
+        version = subprocess.run([str(directory / ('postgres.exe' if WINDOWS else 'postgres')), '--version'], capture_output=True, text=True)
         if version.returncode == 0 and version.stdout.split()[-1].split('.')[0] == data_version:
             return directory
     raise LaunchError('Не найдены бинарники PostgreSQL ' + data_version +
@@ -140,6 +150,14 @@ def detect_lan_host():
         if not lan_ipv4(override):
             raise LaunchError('TIPRO_LAN_HOST должен содержать IPv4-адрес компьютера в локальной сети.')
         return override
+    if WINDOWS:
+        # A VPN can own the default route. Prefer a private physical adapter address.
+        try:
+            result = subprocess.run(['powershell.exe', '-NoProfile', '-Command',
+                "Get-NetIPConfiguration | Where-Object { $_.NetAdapter.HardwareInterface -and $_.IPv4DefaultGateway } | ForEach-Object { $_.IPv4Address.IPAddress }"], capture_output=True, text=True, timeout=5)
+            for address in result.stdout.splitlines():
+                if lan_ipv4(address.strip()):return address.strip()
+        except (OSError, subprocess.TimeoutExpired):pass
     # On this Mac the default route can belong to a VPN (utun). Prefer physical Wi-Fi/Ethernet.
     if sys.platform == 'darwin':
         for interface in ('en0', 'en1', 'en2'):
@@ -168,6 +186,18 @@ def configured_frontend(base):
     except (ValueError, AttributeError):
         return None
 
+def lock_launcher(file):
+    if WINDOWS:
+        import msvcrt
+        if file.seek(0, os.SEEK_END) == 0:
+            file.write(b'0');file.flush()
+        file.seek(0)
+        try:msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as error:raise BlockingIOError from error
+    else:
+        import fcntl
+        fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--no-open', action='store_true', help='Не открывать браузер автоматически')
@@ -195,7 +225,7 @@ def main():
         frontend_url = f'http://{host}:{frontend_port}'
     else:
         frontend_url = f'http://localhost:{frontend_port}'
-        say('Нет адреса локальной сети: сайт будет доступен только на Mac. Подключите Wi-Fi и перезапустите.')
+        say('Нет адреса локальной сети: сайт будет доступен только на этом компьютере. Подключите Wi-Fi и перезапустите.')
     # Child API gets the same public address as Vue and the QR issuer. Secrets stay in .env.
     os.environ['FRONTEND_URL'] = frontend_url
     os.environ['CORS_ORIGINS'] = json.dumps(list(dict.fromkeys([
@@ -205,9 +235,9 @@ def main():
     runtime = BACKEND / '.runtime'
     runtime.mkdir(exist_ok=True)
     # Retain the handle for the whole session. OS releases it even after a crash.
-    with (runtime / 'launcher.lock').open('a') as lock:
+    with (runtime / 'launcher.lock').open('a+b') as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_launcher(lock)
         except BlockingIOError:
             say('Tipro уже запускается или работает в другом окне.')
             wait_ready(lambda: frontend_ready(frontend_url) and api_ready(api_url), 'Tipro')
@@ -218,7 +248,7 @@ def main():
         if not asyncio.run(database_ready(settings)):
             from sqlalchemy.engine import make_url
             db_url = make_url(settings.database_url)
-            if db_url.host not in ('localhost', '127.0.0.1') or not (runtime / 'pgdata/PG_VERSION').is_file():
+            if db_url.host not in ('localhost', '127.0.0.1'):
                 raise LaunchError('База из DATABASE_URL недоступна. Проверьте подключение; инструкция — backend/README.md.')
             run([PYTHON, BACKEND / 'scripts/local_postgres.py', '--bin-dir', postgres_bin()])
             if not asyncio.run(database_ready(settings)):
@@ -259,7 +289,7 @@ def terminate(signum, frame):
 
 if __name__ == '__main__':
     signal.signal(signal.SIGTERM, terminate)
-    signal.signal(signal.SIGHUP, terminate)
+    if hasattr(signal, 'SIGHUP'):signal.signal(signal.SIGHUP, terminate)
     try:
         main()
     except KeyboardInterrupt:
@@ -269,6 +299,6 @@ if __name__ == '__main__':
         sys.exit(1)
     finally:
         # npm/Terminal may forward the same interrupt more than once during shutdown.
-        for event in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        for event in (signal.SIGINT, signal.SIGTERM, getattr(signal, 'SIGHUP', signal.SIGTERM)):
             signal.signal(event, signal.SIG_IGN)
         stop_children()

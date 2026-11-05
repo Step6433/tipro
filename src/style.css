@@ -505,3 +505,14 @@ select { cursor: pointer; }
 @media (max-width: 600px) { .topbar { flex-wrap: wrap; height: auto; gap: 8px; padding-top: 10px; padding-bottom: 10px; } .pay-header > span { width: 100%; } }
 
 .topbar > .language-switch { margin-left: auto; }
+
+.notification-count { display:inline-flex; align-items:center; justify-content:center; min-width:22px; height:22px; padding:0 6px; border-radius:12px; background:#e4efe8; color:#245c43; font-size:12px; margin-left:auto; }
+.approval-requests { padding:24px; margin-bottom:24px; }
+.approval-requests h2 { display:flex; align-items:center; gap:9px; }
+.approval-request { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 0; border-top:1px solid #e9ece7; }
+.approval-request p { margin:4px 0; overflow-wrap:anywhere; }
+.approval-wait { text-align:center; }
+.approval-wait > svg { color:#65816f; margin-bottom:18px; }
+.approval-wait > p { margin:16px 0; line-height:1.6; }
+.approval-wait > .text-link { margin:18px auto 0; }
+@media(max-width:600px) { .approval-request { align-items:flex-start; flex-direction:column; } }

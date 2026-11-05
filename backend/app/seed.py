@@ -47,10 +47,11 @@ async def seed():
                 workers.append(e)
                 async def make_goal():return Goal(employee_id=e.employee_id,title='На путешествие',target=Decimal(5000000 if currency=='VND' else 50000),raised=0,currency=currency,active=True,created_at=utcnow()-timedelta(days=31))
                 await seeded(db,f'seed-goal-{index}-{number}',Goal,make_goal)
-            async def make_qr():
-                token=str(secrets.randbits(256));expires=None
-                return QrLink(merchant_id=m.merchant_id,employee_id=None,receipt_id=0,receipt_number=None,bill_amount=None,currency=currency,nonce=token,exp='0',signature=sign_qr(token,'0'),token_version='v1',expires_at=expires,active=True,label=f'QR ресторана · {city}')
-            q,_=await seeded(db,f'seed-qr-{index}',QrLink,make_qr)
+            for number,e in enumerate(workers,1):
+                async def make_qr():
+                    token=str(secrets.randbits(256));created=utcnow().replace(microsecond=0);expires=created+timedelta(hours=24)
+                    return QrLink(merchant_id=m.merchant_id,employee_id=e.employee_id,receipt_id=0,receipt_number=None,bill_amount=None,currency=currency,nonce=token,exp=str(int(expires.timestamp())),signature=sign_qr(token,str(int(expires.timestamp()))),token_version='v2',created_at=created,expires_at=expires,active=True,label=f'QR сотрудника · {city}')
+                await seeded(db,f'seed-qr-v2-{index}-{number}',QrLink,make_qr)
             for day in range(30):
                 for number,e in enumerate(workers,1):
                     key=f'seed-payment-{index}-{day}-{number}'
@@ -59,7 +60,7 @@ async def seed():
                     created=utcnow()-timedelta(days=day,hours=number)
                     tip=Decimal((day%5+1)*(10000 if currency=='VND' else 50))
                     status='DECLINED' if day%11==0 else 'CANCELED' if day%13==0 else 'PENDING' if day%17==0 else 'SUCCESS'
-                    async def make_payment():return Payment(merchant_id=m.merchant_id,employee_id=e.employee_id,amount=q.bill_amount or Decimal(0),tip=tip,currency=currency,status=status,timestamp=created.isoformat(),created_at=created,updated_at=created,qr_id=q.qr_id,goal_id=goal.goal_id if goal else None,external_id='demo_'+secrets.token_urlsafe(24),public_token=secrets.token_urlsafe(32),provider='demo',provider_outcome='pending',provider_due_at=None)
+                    async def make_payment():return Payment(merchant_id=m.merchant_id,employee_id=e.employee_id,amount=Decimal(0),tip=tip,currency=currency,status=status,timestamp=created.isoformat(),created_at=created,updated_at=created,qr_id=None,goal_id=goal.goal_id if goal else None,external_id=None,public_token=None,provider='legacy',provider_outcome='pending',provider_due_at=None)
                     await seeded(db,key,Payment,make_payment)
                     if status=='SUCCESS' and goal:await db.execute(update(Goal).where(Goal.goal_id==goal.goal_id).values(raised=Goal.raised+tip))
         await db.commit()

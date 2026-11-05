@@ -32,8 +32,8 @@ class QrInput(Input):
     receipt_number: str | None = Field(default=None, alias='receiptNumber', min_length=1, max_length=40)
     bill_amount: Decimal | None = Field(default=None, alias='billAmount')
     currency: str | None = Field(default=None, min_length=3, max_length=3)
-    expires_in_days: int | None = Field(default=None, alias='expiresInDays', ge=1, le=365)
-    employee_id: int | None = Field(default=None, alias='employeeId', gt=0)
+    expires_in_days: Literal[1] | None = Field(default=None, alias='expiresInDays')
+    employee_id: int = Field(alias='employeeId', gt=0)
 
 class QrUpdate(Input):
     active: bool

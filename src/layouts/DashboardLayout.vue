@@ -39,7 +39,7 @@ async function logout(){await store.logout();router.push('/login')}
     <aside class="sidebar" :class="{open:mobile}">
       <div class="sidebar-brand"><BrandLogo/><button class="icon-btn mobile-only" @click="mobile=false" :aria-label="$t('Закрыть меню')"><X :size="20"/></button></div>
       <div class="workspace"><span class="workspace-icon">{{ initials(store.merchant?.name || 'Tipro') }}</span><div><strong>{{ store.merchant?.name || 'Tipro' }}</strong><span>{{ $t(roleNames[store.session?.role]) }}</span></div></div>
-      <nav><RouterLink v-for="link in links" :key="link.to" :to="link.to" :class="{active:route.path===link.to}" @click="mobile=false"><component :is="link.icon" :size="18"/>{{ $t(link.label) }}</RouterLink></nav>
+      <nav><RouterLink v-for="link in links" :key="link.to" :to="link.to" :class="{active:route.path===link.to}" @click="mobile=false"><component :is="link.icon" :size="18"/>{{ $t(link.label) }}<span v-if="link.to==='/app/admin' && store.pendingRestaurantCount" class="notification-count">{{ store.pendingRestaurantCount }}</span></RouterLink></nav>
       <div class="sidebar-bottom"><div class="sidebar-profile"><span class="avatar small">{{ initials(store.user?.name) }}</span><div><strong>{{ store.user?.name }}</strong><span>{{ store.user?.email }}</span></div></div><button class="sidebar-utility" @click="logout"><LogOut :size="17"/>{{ $t('Выйти из аккаунта') }}</button></div>
     </aside>
     <div class="dashboard-body">

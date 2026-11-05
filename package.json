@@ -8,11 +8,12 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
     "test": "node --test tests/*.test.js",
-    "dev:api": "cd backend && .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --no-access-log",
-    "test:backend": "cd backend && .venv/bin/python -m pytest -q",
+    "dev:api": "node scripts/run-python.mjs api",
+    "test:backend": "node scripts/run-python.mjs test",
     "check:api": "node scripts/check-api.mjs",
-    "start": "backend/.venv/bin/python scripts/start.py",
-    "db:schema": "backend/.venv/bin/python backend/scripts/export_schema.py"
+    "start": "node scripts/run-python.mjs start",
+    "db:schema": "node scripts/run-python.mjs schema",
+    "create:admin": "node scripts/run-python.mjs admin"
   },
   "dependencies": {
     "vue": "^3.5.0",

@@ -17,7 +17,6 @@ class Settings(BaseSettings):
     cookie_name: str = 'tipro_session'
     allow_demo_controls: bool = True
     allow_admin_registration: bool = False
-    qr_expiry_days: int = Field(default=30, ge=1, le=365)
     legacy_currency: str = 'RUB'
     demo_password: SecretStr | None = None
     demo_delay_seconds: float = Field(default=1.0, ge=0, le=60)

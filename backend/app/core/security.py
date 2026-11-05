@@ -61,7 +61,7 @@ def sign_qr(nonce, exp):
     return hmac.new(get_settings().jwt_secret.get_secret_value().encode(), payload, hashlib.sha256).hexdigest()
 
 def qr_token(q):
-    return f'{q.nonce}.{q.exp}.{q.signature}' if q.token_version == 'v1' else q.nonce
+    return f'{q.nonce}.{q.exp}.{q.signature}' if q.token_version in ('v1', 'v2') else q.nonce
 
 def parse_qr_token(token):
     try:

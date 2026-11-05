@@ -5,6 +5,8 @@ import { t } from '../i18n'
 import { currentCurrency } from '../utils/currency'
 export const useAppStore = defineStore('app', () => {
   const session = ref(null), ready = ref(false), user = ref(null), merchant = ref(null)
+  const pendingRestaurantCount = ref(0)
+  const awaitingApproval = computed(() => session.value?.role === 'merchant' && session.value.merchantStatus === 'PENDING')
   const analytics = ref(null), currency = currentCurrency
   const employees = ref([]), qrs = ref([]), payments = ref([]), loading = ref(false), error = ref(''), toast = ref('')
   let toastTimer, pendingLoad, generation = 0
@@ -15,9 +17,10 @@ export const useAppStore = defineStore('app', () => {
   const sortedPayments = computed(() => [...payments.value].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)))
   const self = computed(() => employees.value.find(e => e.id === session.value?.employeeId))
   function notify(message) { toast.value = message; clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.value = '', 3500) }
-  function clear() { generation++; pendingLoad = null; user.value = null; merchant.value = null; employees.value = []; qrs.value = []; payments.value = []; error.value = ''; loading.value = false; analytics.value = null }
+  function clear() { generation++; pendingLoad = null; user.value = null; merchant.value = null; employees.value = []; qrs.value = []; payments.value = []; error.value = ''; loading.value = false; analytics.value = null; pendingRestaurantCount.value = 0 }
   async function init() { if (!ready.value) { session.value = await api.session(); ready.value = true } }
   async function load() {
+    if (awaitingApproval.value) return
     if (pendingLoad) return pendingLoad
     const version = generation
     loading.value = true; error.value = ''
@@ -30,14 +33,14 @@ export const useAppStore = defineStore('app', () => {
     pendingLoad = request
     return request
   }
-  async function authenticate(method, values) { const next = await api[method](values); clear(); session.value = next; await load() }
+  async function authenticate(method, values) { const next = await api[method](values); clear(); session.value = next; if (!awaitingApproval.value) await load() }
   async function logout() { await api.logout(); clear(); session.value = null }
   async function refreshSession() {
     const next = await api.session()
     if (next?.userId !== session.value?.userId) clear()
     session.value = next
-    if (next) await load()
+    if (next && !awaitingApproval.value) await load()
   }
   const employeeName = id => employees.value.find(e => e.id === id)?.name || t('Сотрудник')
-  return { session, ready, user, self, merchant, employees, qrs, payments, loading, error, toast, total, average, successful, sortedPayments, analytics, currency, init, load, authenticate, logout, refreshSession, notify, employeeName }
+  return { session, awaitingApproval, pendingRestaurantCount, ready, user, self, merchant, employees, qrs, payments, loading, error, toast, total, average, successful, sortedPayments, analytics, currency, init, load, authenticate, logout, refreshSession, notify, employeeName }
 })

@@ -23,8 +23,8 @@ try{
   const before=await api.workspace({currency:'THB'})
   assert.equal(before.user.role,'merchant')
   const employee=before.employees.find(e=>e.registered)
-  const qr=before.qrs.find(q=>q.active)
-  assert.ok(employee&&qr,'Demo employee and QR must exist; run the seed.')
+  assert.ok(employee,'A demo employee must exist; run the seed.')
+  const qr=before.qrs.find(q=>q.active&&q.employeeId===employee.id) || await api.createQr({employeeId:employee.id,label:'Проверка оплаты',currency:before.currency})
   const totalBefore=before.analytics.totals[0].total
   await api.logout()
   await api.login({email:'worker11@tipro.example.com',password})

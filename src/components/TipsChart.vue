@@ -1,12 +1,13 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { locale, numberLocales } from '../i18n'
-import { money, localDate } from '../utils/format'
-const props = defineProps({ payments: Array, dailySeries: {type:Array,default:null}, days: { type: Number, default: 7 } })
+import { money } from '../utils/format'
+import { browserTimeZone, buildDailySeries } from '../utils/dates'
+const props = defineProps({ payments: Array, dailySeries: {type:Array,default:null}, seriesTimeZone: {type:String,default:null}, days: { type: Number, default: 7 } })
 const hovered = ref(null)
-const series = computed(() => Array.from({ length: props.days }, (_, i) => { const d = new Date(); d.setDate(d.getDate() - props.days + 1 + i); const key = localDate(d); return { date: d.toLocaleDateString(numberLocales[locale.value], { day: 'numeric', month: 'short' }), value: props.dailySeries ? Number(props.dailySeries.find(s=>s.period.slice(0,10)===d.toISOString().slice(0,10))?.total||0) : props.payments.filter(p => p.status === 'success' && localDate(p.createdAt) === key).reduce((s,p) => s+p.amount,0) } }))
+const series = computed(() => buildDailySeries({ payments: props.payments, dailySeries: props.dailySeries, seriesTimeZone: props.seriesTimeZone, days: props.days, timeZone: browserTimeZone(), locale: numberLocales[locale.value] }))
 const max = computed(() => Math.max(1000, Math.ceil(Math.max(...series.value.map(s=>s.value)) / 1000) * 1000))
-const points = computed(() => series.value.map((s,i) => ({ x: 20+i*(760/(props.days-1)), y: 170-s.value/max.value*145, ...s })))
+const points = computed(() => series.value.map((s,i) => ({ x: 20+i*(760/Math.max(1,props.days-1)), y: 170-s.value/max.value*145, ...s })))
 const line = computed(() => points.value.map((p,i) => `${i?'L':'M'}${p.x},${p.y}`).join(' '))
 const fill = computed(() => `${line.value} L780,180 L20,180 Z`)
 const active = computed(() => hovered.value === null ? null : points.value[hovered.value])

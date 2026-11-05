@@ -1,9 +1,10 @@
 from app.core.security import invite_token, qr_token
+from app.models import utcnow
 
 STATUS = {'SUCCESS': 'success', 'DECLINED': 'declined', 'CANCELED': 'cancelled', 'PENDING': 'pending'}
 
 def merchant_view(m):
-    return {'id': str(m.merchant_id), 'name': m.name, 'email': m.contact_email or '', 'location': m.description or '', 'status': m.status, 'currency': m.currency, 'language': m.language, 'tipPercentages': m.tip_percentages, 'paymentMethods': m.payment_methods, 'createdAt': m.created_at}
+    return {'id': str(m.merchant_id), 'name': m.name, 'email': m.contact_email or '', 'location': m.description or '', 'status': m.status, 'currency': m.currency, 'language': m.language, 'tipPercentages': m.tip_percentages, 'paymentMethods': m.payment_methods, 'createdAt': m.created_at, 'approvedAt': m.approved_at, 'approvedBy': str(m.approved_by) if m.approved_by else None}
 
 def goal_view(g):
     return {'id': str(g.goal_id), 'title': g.title, 'target': str(g.target), 'raised': str(g.raised), 'currency': g.currency}
@@ -19,7 +20,8 @@ def employee_view(e, goals, private=False, invitations=False):
     return result
 
 def qr_view(q):
-    return {'id': qr_token(q), 'nonce': q.nonce, 'exp': q.exp, 'sign': q.signature, 'merchantId': str(q.merchant_id), 'employeeId': str(q.employee_id) if q.employee_id else None, 'type': 'restaurant', 'label': q.label, 'active': q.active and q.token_version == 'v1', 'createdAt': q.created_at, 'expiresAt': q.expires_at, 'currency': q.currency, 'receipt': {'number': q.receipt_number, 'billAmount': str(q.bill_amount) if q.bill_amount is not None else None} if q.receipt_number else None}
+    state='legacy' if q.token_version!='v2' else 'used' if q.used_at else 'expired' if not q.expires_at or q.expires_at<=utcnow() else 'active' if q.active else 'disabled'
+    return {'state': state, 'usedAt': q.used_at, 'singleUse': q.token_version == 'v2', 'id': qr_token(q), 'nonce': q.nonce, 'exp': q.exp, 'sign': q.signature, 'merchantId': str(q.merchant_id), 'employeeId': str(q.employee_id) if q.employee_id else None, 'type': 'employee', 'label': q.label, 'active': state == 'active', 'createdAt': q.created_at, 'expiresAt': q.expires_at, 'currency': q.currency, 'receipt': {'number': q.receipt_number, 'billAmount': str(q.bill_amount) if q.bill_amount is not None else None} if q.receipt_number else None}
 
 def payment_view(p, public=False):
     result = {'id': str(p.payment_id), 'merchantId': str(p.merchant_id), 'employeeId': str(p.employee_id), 'amount': str(p.tip), 'billAmount': str(p.amount), 'currency': p.currency, 'status': STATUS[p.status], 'createdAt': p.created_at, 'updatedAt': p.updated_at, 'qrId': str(p.qr_id) if p.qr_id else None, 'goalId': str(p.goal_id) if p.goal_id else None}

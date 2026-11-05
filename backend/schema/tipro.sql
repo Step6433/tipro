@@ -89,7 +89,9 @@ CREATE TABLE public.merchants (
     tip_percentages jsonb DEFAULT '[5, 10, 15]'::jsonb NOT NULL,
     payment_methods jsonb DEFAULT '["demo"]'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    approved_at timestamp with time zone,
+    approved_by integer
 );
 
 
@@ -245,7 +247,9 @@ CREATE TABLE public.qr_links (
     bill_amount numeric(20,4),
     currency character varying(3) DEFAULT 'RUB'::character varying NOT NULL,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    used_at timestamp with time zone,
+    CONSTRAINT ck_qr_v2_employee_deadline CHECK ((((token_version)::text <> 'v2'::text) OR ((employee_id IS NOT NULL) AND (expires_at IS NOT NULL) AND (exp <> '0'::text) AND (expires_at = (created_at + '24:00:00'::interval)))))
 );
 
 
@@ -426,6 +430,13 @@ CREATE UNIQUE INDEX ix_qr_nonce_v1 ON public.qr_links USING btree (nonce) WHERE 
 
 
 --
+-- Name: ix_qr_nonce_v2; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ix_qr_nonce_v2 ON public.qr_links USING btree (nonce) WHERE ((token_version)::text = 'v2'::text);
+
+
+--
 -- Name: ix_tip_goals_employee_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -461,6 +472,14 @@ ALTER TABLE ONLY public.payments
 
 ALTER TABLE ONLY public.qr_links
     ADD CONSTRAINT employee_id FOREIGN KEY (employee_id) REFERENCES public.employees(employee_id) NOT VALID;
+
+
+--
+-- Name: merchants fk_merchants_approved_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.merchants
+    ADD CONSTRAINT fk_merchants_approved_by FOREIGN KEY (approved_by) REFERENCES public.employees(employee_id);
 
 
 --
@@ -525,4 +544,4 @@ ALTER TABLE ONLY public.tip_goals
 
 
 CREATE TABLE public.alembic_version (version_num varchar(32) NOT NULL PRIMARY KEY);
-INSERT INTO public.alembic_version (version_num) VALUES ('0005_permanent_qr');
+INSERT INTO public.alembic_version (version_num) VALUES ('0007_employee_qr');

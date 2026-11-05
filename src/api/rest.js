@@ -1,4 +1,5 @@
 import { request, allPages, query, setAccessToken } from './http'
+import { browserTimeZone } from '../utils/dates'
 import { createIdempotencyKey } from '../utils/idempotency'
 
 const amountFields = ['amount', 'billAmount', 'target', 'raised', 'total', 'average']
@@ -45,9 +46,10 @@ export const restApi = {
     const core = await request('/workspace')
     currency = currency || core.merchant?.currency || 'RUB'
     if (core.user.role === 'admin') return { ...core, employees: [], qrs: [], payments: [], analytics: null, currency }
+    const timezone = browserTimeZone()
     const [employees, qrs, payments, analytics] = await Promise.all([
       allPages('/employees'), core.user.role === 'merchant' ? allPages('/qrs') : [],
-      allPages('/payments', { currency }), request('/analytics' + query({ currency })),
+      allPages('/payments', { currency, timezone }), request('/analytics' + query({ currency, timezone })),
     ])
     return normalize({ ...core, employees, qrs, payments, analytics, currency })
   },
@@ -55,7 +57,7 @@ export const restApi = {
   inviteEmployee: id => request(`/employees/${id}/invitation`, { method: 'POST' }),
   async saveGoal(employeeId, { id, title, target, currency = 'RUB' }) { return normalize(await request(`/employees/${employeeId}/goals${id ? `/${id}` : ''}`, { method: id ? 'PATCH' : 'POST', body: { title, target: String(target), currency } })) },
   activateGoal: (employeeId, goalId) => request(`/employees/${employeeId}/goals/${goalId}/active`, { method: 'PUT' }),
-  async createQr({ currency, label } = {}) { return normalize(await request('/qrs', { method: 'POST', body: { ...(currency ? { currency } : {}), ...(label ? { label } : {}) } })) },
+  async createQr({ employeeId, currency, label } = {}) { return normalize(await request('/qrs', { method: 'POST', body: { employeeId: Number(employeeId), ...(currency ? { currency } : {}), ...(label ? { label } : {}) } })) },
   async toggleQr(token) {
     const list = await allPages('/qrs')
     const qr = list.find(q => q.id === token)
@@ -107,16 +109,18 @@ export const restApi = {
   },
   async checkPayment(token) { const result=normalize(await request(`/public/payments/${encodeURIComponent(token)}`)); if(result.status!=='pending')clearPaymentToken(token); return result },
   async cancelPayment(token) { const result=normalize(await request(`/public/payments/${encodeURIComponent(token)}/cancel`, { method: 'POST' })); if(result.status!=='pending')clearPaymentToken(token); return result },
-  async analytics(filters = {}) { return normalize(await request('/analytics' + query(filters))) },
+  async analytics(filters = {}) { return normalize(await request('/analytics' + query({timezone:browserTimeZone(),...filters}))) },
   async settings(id, body) { return request(`/restaurants/${id}/settings`, { method: 'PATCH', body }) },
   async exportPayments(filters = {}) {
-    const response = await request('/payments/export' + query(filters), { raw: true })
+    const response = await request('/payments/export' + query({timezone:browserTimeZone(),...filters}), { raw: true })
     return response.blob()
   },
+  approveRestaurant: id => request(`/admin/restaurants/${encodeURIComponent(id)}/approve`, { method: 'POST' }),
   async admin({ currency = 'RUB' } = {}) {
-    const [overview, merchants, employees, payments] = await Promise.all([
-      request('/admin/overview' + query({ currency })), allPages('/restaurants'), allPages('/employees'), allPages('/payments', { currency }),
+    const timezone=browserTimeZone()
+    const [overview, merchants, employees, payments, notifications] = await Promise.all([
+      request('/admin/overview' + query({ currency, timezone })), allPages('/restaurants'), allPages('/employees'), allPages('/payments', { currency, timezone }), allPages('/admin/notifications'),
     ])
-    return normalize({ ...overview, merchants, employees, payments })
+    return normalize({ ...overview, merchants, employees, payments, notifications })
   },
 }

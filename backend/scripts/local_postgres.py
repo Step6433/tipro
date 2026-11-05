@@ -6,6 +6,7 @@ import asyncio
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import asyncpg
@@ -24,7 +25,8 @@ for value in [url.username,url.database]:
     if not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*',value or ''):raise SystemExit('Use simple local DB/user identifiers.')
 bin_dir=Path(args.bin_dir);runtime=ROOT/'.runtime';runtime.mkdir(exist_ok=True)
 data=runtime/'pgdata';log=runtime/'postgres.log'
-def command(name,*arguments,**kwargs):return subprocess.run([str(bin_dir/name),*map(str,arguments)],check=True,**kwargs)
+def executable(name):return bin_dir/(name+'.exe' if os.name=='nt' else name)
+def command(name,*arguments,**kwargs):return subprocess.run([str(executable(name)),*map(str,arguments)],check=True,**kwargs)
 if args.stop:
     command('pg_ctl','-D',data,'stop','-m','fast');raise SystemExit()
 if not (data/'PG_VERSION').exists():
@@ -33,9 +35,11 @@ if not (data/'PG_VERSION').exists():
     with os.fdopen(fd,'w') as output:output.write(url.password+'\n')
     try:command('initdb','-D',data,'-U',url.username,'--auth=scram-sha-256','--pwfile='+str(pwfile),'--encoding=UTF8','--locale=C',stdout=subprocess.DEVNULL)
     finally:pwfile.unlink(missing_ok=True)
-status=subprocess.run([str(bin_dir/'pg_ctl'),'-D',str(data),'status'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+status=subprocess.run([str(executable('pg_ctl')),'-D',str(data),'status'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 if status.returncode:
-    command('pg_ctl','-D',data,'-l',log,'-o',f'-h 127.0.0.1 -p {url.port or 5432} -k {runtime}', '-w','start',stdout=subprocess.DEVNULL)
+    server_options=f'-h 127.0.0.1 -p {url.port or 5432}'
+    if os.name!='nt':server_options+=' -k '+shlex.quote(str(runtime))
+    command('pg_ctl','-D',data,'-l',log,'-o',server_options, '-w','start',stdout=subprocess.DEVNULL)
 async def prepare():
     conn=await asyncpg.connect(host=url.host,port=url.port or 5432,user=url.username,password=url.password,database='postgres')
     exists=await conn.fetchval('SELECT 1 FROM pg_database WHERE datname=$1',url.database)

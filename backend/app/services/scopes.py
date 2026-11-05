@@ -1,4 +1,5 @@
-from datetime import datetime, time, timedelta, timezone, date
+from datetime import datetime, time, timedelta, date
+from sqlalchemy import func, literal, DateTime
 from app.core.errors import ApiError
 from app.core.security import role_of
 from app.models import Payment, Employee, Merchant
@@ -17,7 +18,7 @@ def employee_conditions(user, merchant_id=None):
         conditions.append(Employee.merchant_id == merchant_id)
     return conditions
 
-def payment_conditions(user, currency=None, start: date | None = None, end: date | None = None, employee_id=None, merchant_id=None, status=None):
+def payment_conditions(user, currency=None, start: date | None = None, end: date | None = None, employee_id=None, merchant_id=None, status=None, time_zone='UTC'):
     role = role_of(user); conditions = []
     if role == 'employee':
         if employee_id and employee_id != user.employee_id:
@@ -35,8 +36,8 @@ def payment_conditions(user, currency=None, start: date | None = None, end: date
         if currency not in CURRENCIES: raise ApiError('Неподдерживаемая валюта.')
         conditions.append(Payment.currency == currency)
     if start and end and start > end: raise ApiError('Начало периода должно быть не позже конца.')
-    if start: conditions.append(Payment.created_at >= datetime.combine(start, time.min, timezone.utc))
-    if end: conditions.append(Payment.created_at < datetime.combine(end + timedelta(days=1), time.min, timezone.utc))
+    if start: conditions.append(Payment.created_at >= func.timezone(time_zone, literal(datetime.combine(start, time.min), type_=DateTime(timezone=False))))
+    if end: conditions.append(Payment.created_at < func.timezone(time_zone, literal(datetime.combine(end + timedelta(days=1), time.min), type_=DateTime(timezone=False))))
     if status:
         statuses = {'success':'SUCCESS','declined':'DECLINED','cancelled':'CANCELED','pending':'PENDING'}
         if status not in statuses: raise ApiError('Неизвестный статус.')

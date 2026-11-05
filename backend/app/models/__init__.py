@@ -20,6 +20,8 @@ class Merchant(Base):
     status: Mapped[str] = mapped_column(Text, default='ACTIVE')
     description: Mapped[str | None] = mapped_column(Text)
     contact_email: Mapped[str | None] = mapped_column(Text)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approved_by: Mapped[int | None] = mapped_column(ForeignKey('employees.employee_id'))
     currency: Mapped[str] = mapped_column(String(3), default='RUB')
     language: Mapped[str] = mapped_column(String(16), default='ru')
     tip_percentages: Mapped[list] = mapped_column(JSONB, default=lambda: [5, 10, 15])
@@ -73,16 +75,21 @@ class QrLink(Base):
     nonce: Mapped[str] = mapped_column(Text)
     exp: Mapped[str] = mapped_column(Text)
     signature: Mapped[str] = mapped_column(Text)
-    token_version: Mapped[str] = mapped_column(String(16), default='v1')
+    token_version: Mapped[str] = mapped_column(String(16), default='v2')
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    label: Mapped[str] = mapped_column(String(80), default='QR на чеке')
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    label: Mapped[str] = mapped_column(String(80), default='QR сотрудника')
     receipt_number: Mapped[str | None] = mapped_column(String(40))
     bill_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))
     currency: Mapped[str] = mapped_column(String(3))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
-    __table_args__ = (Index('ix_qr_nonce_v1', 'nonce', unique=True, postgresql_where=token_version == 'v1'),)
+    __table_args__ = (
+        Index('ix_qr_nonce_v1', 'nonce', unique=True, postgresql_where=token_version == 'v1'),
+        Index('ix_qr_nonce_v2', 'nonce', unique=True, postgresql_where=token_version == 'v2'),
+        CheckConstraint("token_version != 'v2' OR (employee_id IS NOT NULL AND expires_at IS NOT NULL AND exp != '0' AND expires_at = created_at + INTERVAL '24 hours')", name='ck_qr_v2_employee_deadline'),
+    )
 
 class Payment(Base):
     __tablename__ = 'payments'

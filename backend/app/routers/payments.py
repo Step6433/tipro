@@ -8,6 +8,7 @@ from fastapi import APIRouter, Header, Request, Query, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
 from app.config import get_settings
+from app.core.dates import validate_timezone
 from app.core.deps import Db, User
 from app.core.errors import ApiError
 from app.models import Payment, Employee, WebhookEvent
@@ -35,15 +36,17 @@ async def cancel(token: str,db: Db):
     result=payment_view(p,True);await db.commit();return result
 
 @router.get('/payments')
-async def history(db: Db,user: User,currency: str|None=None,start: date|None=None,end: date|None=None,employee_id: int|None=None,merchant_id: int|None=None,status: str|None=None,offset: int=Query(0,ge=0),limit: int=Query(100,ge=1,le=100)):
-    conditions=payment_conditions(user,currency,start,end,employee_id,merchant_id,status)
+async def history(db: Db,user: User,currency: str|None=None,start: date|None=None,end: date|None=None,employee_id: int|None=None,merchant_id: int|None=None,status: str|None=None,offset: int=Query(0,ge=0),limit: int=Query(100,ge=1,le=100),timezone: str=Query('UTC',min_length=1,max_length=100)):
+    await validate_timezone(db,timezone)
+    conditions=payment_conditions(user,currency,start,end,employee_id,merchant_id,status,time_zone=timezone)
     total=await db.scalar(select(func.count()).select_from(Payment).where(*conditions))
     rows=await db.scalars(select(Payment).where(*conditions).order_by(Payment.created_at.desc().nulls_last(),Payment.payment_id.desc()).offset(offset).limit(limit))
     return {'items':[payment_view(p) for p in rows],'total':total,'offset':offset,'limit':limit}
 
 @router.get('/payments/export')
-async def export(db: Db,user: User,currency: str|None=None,start: date|None=None,end: date|None=None,employee_id: int|None=None,merchant_id: int|None=None,status: str|None=None):
-    conditions=payment_conditions(user,currency,start,end,employee_id,merchant_id,status)
+async def export(db: Db,user: User,currency: str|None=None,start: date|None=None,end: date|None=None,employee_id: int|None=None,merchant_id: int|None=None,status: str|None=None,timezone: str=Query('UTC',min_length=1,max_length=100)):
+    await validate_timezone(db,timezone)
+    conditions=payment_conditions(user,currency,start,end,employee_id,merchant_id,status,time_zone=timezone)
     stmt=select(Payment,Employee.name).join(Employee,Payment.employee_id==Employee.employee_id).where(*conditions).order_by(Payment.created_at.desc().nulls_last())
     def row(values):
         def safe(value):

@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.config import get_settings
 from app.database import engine
 from app.core.errors import ApiError
-from app.routers import auth, workspace, qrs, payments, analytics
+from app.routers import auth, workspace, qrs, payments, analytics, admin
 
 settings=get_settings()
 # Access paths can contain public QR / payment capabilities. Do not log them.
@@ -83,4 +83,4 @@ async def capabilities():
     from app.core.money import CURRENCIES
     return {'frontendUrl':settings.frontend_url.rstrip('/'),'currencies':CURRENCIES,'provider':'demo','paymentMethods':['demo'],'demoControls':settings.allow_demo_controls,'adminRegistration':settings.allow_admin_registration}
 
-for router in [auth.router,workspace.router,qrs.router,payments.router,analytics.router]:app.include_router(router,prefix='/api')
+for router in [auth.router,workspace.router,qrs.router,payments.router,analytics.router,admin.router]:app.include_router(router,prefix='/api')

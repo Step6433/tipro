@@ -3,7 +3,7 @@ import hashlib
 import json
 import secrets
 from decimal import Decimal
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from sqlalchemy import select, update, text
 from app.core.errors import ApiError
 from app.core.money import money, percent_tip
@@ -27,16 +27,22 @@ async def transition(db, payment, status):
         payment.failure_reason = 'QR_EXPIRED'
     if status == 'SUCCESS' and payment.qr_id:
         qr = await db.scalar(select(QrLink).where(QrLink.qr_id == payment.qr_id).with_for_update())
-        if not qr or not qr.active or qr.nonce != payment.qr_nonce:
+        if not qr or qr.used_at or not qr.active:
+            status = 'DECLINED'
+            payment.failure_reason = 'QR_USED'
+        elif qr.token_version!='v2' or qr.nonce != payment.qr_nonce or qr.employee_id != payment.employee_id:
             status = 'DECLINED'
             payment.failure_reason = 'QR_USED'
         elif not hmac.compare_digest(qr.signature, sign_qr(qr.nonce,qr.exp)):
             status = 'DECLINED'
             payment.failure_reason = 'INVALID_QR'
-        elif (qr.expires_at and qr.expires_at <= utcnow()) or (int(qr.exp) != 0 and int(qr.exp) <= utcnow().timestamp()):
+        elif not qr.expires_at or qr.expires_at <= utcnow() or int(qr.exp) <= utcnow().timestamp():
             status = 'DECLINED'
             payment.failure_reason = 'QR_EXPIRED'
-        # Permanent restaurant QR remains unchanged for other visitors.
+        else:
+            # Holding the QR row lock makes consumption atomic with payment and goal credit.
+            qr.used_at = utcnow()
+            qr.active = False
     payment.status=status;payment.updated_at=utcnow()
     if status=='SUCCESS' and payment.goal_id:
         # This runs only while holding the payment row lock; each payment credits once.
@@ -78,10 +84,13 @@ async def create_payment(db,token,body,idempotency_key):
     if existing:
         if existing.request_fingerprint!=fingerprint:raise ApiError('Этот Idempotency-Key уже использован с другими данными.','CONFLICT',409)
         return existing,False
+    pending=await db.scalar(select(Payment.payment_id).where(Payment.qr_id==qr.qr_id,Payment.status=='PENDING').limit(1))
+    if pending:
+        raise ApiError('По этому QR уже выполняется платёж. Дождитесь его завершения.','QR_PAYMENT_PENDING',409)
     goal=await db.scalar(select(Goal).where(Goal.employee_id==e.employee_id,Goal.active.is_(True),Goal.currency==qr.currency))
     intent=await PROVIDERS[body.method].create(CheckoutRequest(amount,qr.currency,idempotency_key,body.scenario))
     now=utcnow()
-    payment=Payment(merchant_id=merchant.merchant_id,employee_id=e.employee_id,amount=qr.bill_amount or Decimal(0),tip=amount,status='PENDING',timestamp=now.isoformat(),currency=qr.currency,qr_id=qr.qr_id,qr_nonce=nonce,qr_expires_at=datetime.fromtimestamp(int(exp),timezone.utc) if int(exp) else now+timedelta(minutes=30),goal_id=goal.goal_id if goal else None,external_id=intent.external_id,public_token=secrets.token_urlsafe(32),idempotency_key=idempotency_key,request_fingerprint=fingerprint,provider=body.method,provider_outcome=intent.outcome,provider_due_at=intent.due_at,created_at=now,updated_at=now)
+    payment=Payment(merchant_id=merchant.merchant_id,employee_id=e.employee_id,amount=qr.bill_amount or Decimal(0),tip=amount,status='PENDING',timestamp=now.isoformat(),currency=qr.currency,qr_id=qr.qr_id,qr_nonce=nonce,qr_expires_at=datetime.fromtimestamp(int(exp),timezone.utc),goal_id=goal.goal_id if goal else None,external_id=intent.external_id,public_token=secrets.token_urlsafe(32),idempotency_key=idempotency_key,request_fingerprint=fingerprint,provider=body.method,provider_outcome=intent.outcome,provider_due_at=intent.due_at,created_at=now,updated_at=now)
     db.add(payment);await db.flush();return payment,True
 
 async def public_payment(db,token):
