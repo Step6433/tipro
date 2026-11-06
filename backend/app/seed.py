@@ -4,11 +4,11 @@ import hashlib
 import secrets
 from datetime import timedelta
 from decimal import Decimal
-from sqlalchemy import select, update
+from sqlalchemy import select, update, text
 from app.config import get_settings
 from app.database import SessionLocal, engine
 from app.models import Merchant, Employee, Goal, QrLink, Payment, SeedRecord, utcnow
-from app.core.security import hash_password, sign_qr
+from app.core.security import hash_password, sign_model_qr
 from app.services.payments import advisory_lock
 
 async def seeded(db,key,model,create):
@@ -50,8 +50,11 @@ async def seed():
             for number,e in enumerate(workers,1):
                 async def make_qr():
                     token=str(secrets.randbits(256));created=utcnow().replace(microsecond=0);expires=created+timedelta(hours=24)
-                    return QrLink(merchant_id=m.merchant_id,employee_id=e.employee_id,receipt_id=0,receipt_number=None,bill_amount=None,currency=currency,nonce=token,exp=str(int(expires.timestamp())),signature=sign_qr(token,str(int(expires.timestamp()))),token_version='v2',created_at=created,expires_at=expires,active=True,label=f'QR сотрудника · {city}')
-                await seeded(db,f'seed-qr-v2-{index}-{number}',QrLink,make_qr)
+                    receipt_id=await db.scalar(text("SELECT nextval('receipt_id_seq')"))
+                    q=QrLink(merchant_id=m.merchant_id,employee_id=e.employee_id,receipt_id=receipt_id,receipt_number=str(receipt_id),bill_amount=Decimal(100000 if currency=='VND' else 1000),currency=currency,nonce=token,exp=str(int(expires.timestamp())),signature='',token_version='v3',created_at=created,expires_at=expires,active=True,label=f'QR сотрудника · {city}')
+                    q.signature=sign_model_qr(q)
+                    return q
+                await seeded(db,f'seed-qr-v3-{index}-{number}',QrLink,make_qr)
             for day in range(30):
                 for number,e in enumerate(workers,1):
                     key=f'seed-payment-{index}-{day}-{number}'

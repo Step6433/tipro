@@ -48,13 +48,22 @@ async def origin_and_limits(request: Request,call_next):
         if len(attempts)>10000:
             for old_key in list(attempts):
                 if not attempts[old_key] or attempts[old_key][-1]<now-300:attempts.pop(old_key,None)
+    if request.url.path.startswith('/api/public/'):
+        now=time.monotonic();key='public:'+(request.client.host if request.client else 'unknown')
+        queue=attempts[key]
+        while queue and queue[0]<now-60:queue.popleft()
+        if len(queue)>=300:return JSONResponse({'message':'Слишком много запросов. Повторите позже.','code':'RATE_LIMIT','retryable':True},status_code=429)
+        queue.append(now)
+        if len(attempts)>10000:
+            for old_key in list(attempts):
+                if not attempts[old_key] or attempts[old_key][-1]<now-300:attempts.pop(old_key,None)
     response=await call_next(request)
     response.headers['Cache-Control']='no-store'
     response.headers['X-Content-Type-Options']='nosniff'
     return response
 
 @app.exception_handler(ApiError)
-async def api_error(request,exc):return JSONResponse({'message':exc.message,'code':exc.code},status_code=exc.status)
+async def api_error(request,exc):return JSONResponse({'message':exc.message,'code':exc.code,'retryable':exc.code in ('QR_EXPIRED','CARD_DECLINED','RATE_LIMIT')},status_code=exc.status)
 
 @app.exception_handler(RequestValidationError)
 async def validation_error(request,exc):

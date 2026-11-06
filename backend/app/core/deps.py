@@ -25,10 +25,10 @@ async def get_current_user(request: Request, db: Db, auth: Annotated[HTTPAuthori
     user = await db.get(Employee, user_id)
     if not session or session.revoked or session.expires_at <= utcnow() or session.employee_id != user_id or not user or not user.active or role_of(user) == 'visitor':
         raise ApiError('Сессия завершена или аккаунт отключён.', 'UNAUTHORIZED', 401)
-    if user.merchant_id and not user.platform_admin:
+    if user.merchant_id and not user.platform_admin and request.url.path != '/api/auth/logout':
         merchant = await db.get(Merchant, user.merchant_id)
         if not merchant or merchant.status.upper() == 'BLOCKED':
-            raise ApiError('Ресторан заблокирован.', 'UNAUTHORIZED', 403)
+            raise ApiError('Ресторан заблокирован.', 'MERCHANT_BLOCKED', 403)
         if merchant.status.upper() != 'ACTIVE':
             pending_status_access = (merchant.status.upper() == 'PENDING' and role_of(user) == 'merchant'
                                      and request.url.path in ('/api/auth/me', '/api/auth/logout'))

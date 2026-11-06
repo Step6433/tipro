@@ -60,18 +60,35 @@ def sign_qr(nonce, exp):
     payload = f'qr:{nonce}:{exp}'.encode()
     return hmac.new(get_settings().jwt_secret.get_secret_value().encode(), payload, hashlib.sha256).hexdigest()
 
+def sign_receipt_qr(merchant_id, employee_id, receipt_id, nonce, exp):
+    payload = f'{merchant_id}|{employee_id}|{receipt_id}|{nonce}|{exp}'.encode()
+    return hmac.new(get_settings().jwt_secret.get_secret_value().encode(), payload, hashlib.sha256).hexdigest()
+
+def sign_model_qr(q):
+    return sign_receipt_qr(q.merchant_id, q.employee_id, q.receipt_id, q.nonce, q.exp) if q.token_version == 'v3' else sign_qr(q.nonce, q.exp)
+
 def qr_token(q):
+    if q.token_version == 'v3':
+        return f'{q.merchant_id}.{q.employee_id}.{q.receipt_id}.{q.nonce}.{q.exp}.{q.signature}'
     return f'{q.nonce}.{q.exp}.{q.signature}' if q.token_version in ('v1', 'v2') else q.nonce
 
 def parse_qr_token(token):
     try:
-        nonce, exp, signature = token.split('.')
+        parts = token.split('.')
+        if len(parts) == 6:
+            merchant, employee, receipt, nonce, exp, signature = parts
+            if not all(p.isascii() and p.isdigit() and int(p)>0 and str(int(p))==p and len(p)<=12 for p in (merchant,employee,receipt)):
+                raise ValueError
+            expected = sign_receipt_qr(merchant,employee,receipt,nonce,exp)
+        else:
+            nonce, exp, signature = parts
+            expected = sign_qr(nonce,exp)
         if not (1 <= len(nonce) <= 100 and nonce.isascii() and all(c.isalnum() or c in '_-' for c in nonce)):
             raise ValueError
         if not (exp.isascii() and exp.isdigit() and len(exp) <= 12 and str(int(exp)) == exp):
             raise ValueError
-        if not hmac.compare_digest(signature, sign_qr(nonce, exp)):
+        if not hmac.compare_digest(signature, expected):
             raise ValueError
         return nonce, exp, signature
     except (ValueError, TypeError):
-        raise ApiError('Подпись QR-кода недействительна.', 'INVALID_QR', 404)
+        raise ApiError('Подпись QR-кода недействительна.', 'INVALID_QR', 422)

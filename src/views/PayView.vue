@@ -1,114 +1,92 @@
 <script setup>
-import LanguageSwitcher from '../components/LanguageSwitcher.vue'
-import { computed, ref, watch, onBeforeUnmount } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, onBeforeRouteLeave } from 'vue-router'
-import { ArrowRight, ArrowLeft, ShieldCheck, Check, X, RotateCcw, AlertCircle, Coffee, UsersRound } from 'lucide-vue-next'
+import { ArrowRight, ShieldCheck, Check, AlertCircle, Coffee } from 'lucide-vue-next'
 import BrandLogo from '../components/BrandLogo.vue'
+import LanguageSwitcher from '../components/LanguageSwitcher.vue'
 import GoalProgress from '../components/GoalProgress.vue'
 import { api } from '../api'
 import { applyRestaurantLanguage } from '../i18n'
 import { money, initials } from '../utils/format'
-import { useAppStore } from '../stores/app'
-import { currencies, currencyStep, currencySymbol } from '../utils/currency'
+import { currencyStep, currencySymbol } from '../utils/currency'
 
-const route = useRoute(), store = useAppStore()
-const data = ref(null), loading = ref(true), state = ref('choose'), error = ref('')
-const checking = ref(false)
-const currency = computed(() => data.value?.qr.currency || 'RUB')
-const selectedId = ref(''), amount = ref(300), scenario = ref('success'), paid = ref(null), cancelling = ref(false)
-const employee = computed(() => data.value?.employees.find(e => e.id === selectedId.value))
-const amountValid = computed(() => { const value=Number(amount.value),factor=10**(currencies[currency.value]||0); return Number.isFinite(value)&&value>0&&value<=10000000&&Math.abs(value*factor-Math.round(value*factor))<0.000001 })
-const presets = computed(() => [150,300,500].map(value=>({label:money(value,currency.value),amount:value})))
-const payMoney = value => money(value,currency.value)
-function setPreset(preset){amount.value=preset.amount}
-
-let controller, loadVersion = 0
-
-async function load() {
-  const version = ++loadVersion
-  loading.value = true; error.value = ''; state.value = 'choose'; data.value = null; selectedId.value = ''
-  try {
-    const result = route.params.merchantId
-      ? await api.resolveRestaurant(route.params.merchantId, typeof route.query.qr === 'string' ? route.query.qr : '')
-      : await api.resolveQr(route.params.id)
-    if (version !== loadVersion) return
-    data.value = result
-    applyRestaurantLanguage(result.merchant.language)
-    const resumed=await api.resumePayment(result.qr.id,result.employees.map(e=>e.id))
-    if(version!==loadVersion)return
-    if(resumed){paid.value=resumed;selectedId.value=resumed.employeeId;amount.value=resumed.amount;state.value=resumed.status}
-    else if(result.employees.length===1)select(result.employees[0])
-
-  } catch (e) { if (version === loadVersion) { error.value = e.message; state.value = e.code==='INVALID_QR'?'invalid':'error' } }
-  finally { if (version === loadVersion) loading.value = false }
+const route=useRoute(),data=ref(null),loading=ref(true),state=ref('welcome'),error=ref(''),busy=ref(false)
+const amount=ref(0),percent=ref(10),scenario=ref('success'),paid=ref(null)
+const employee=computed(()=>data.value?.employees[0])
+const currency=computed(()=>data.value?.qr.currency||'RUB')
+const bill=computed(()=>Number(data.value?.qr.receipt?.billAmount||0))
+const maxTip=computed(()=>Math.floor((bill.value*.5+Number.EPSILON)/currencyStep(currency.value))*currencyStep(currency.value))
+const amountValid=computed(()=>Number.isFinite(Number(amount.value))&&Number(amount.value)>=0&&Number(amount.value)<=maxTip.value&&Math.abs(Number(amount.value)/currencyStep(currency.value)-Math.round(Number(amount.value)/currencyStep(currency.value)))<.00001)
+const presets=computed(()=>[...new Set([0,5,10,15,20,...(data.value?.merchant.tipPercentages||[])])].sort((a,b)=>a-b))
+const total=computed(()=>bill.value+Number(amount.value||0))
+const fmt=value=>money(value,currency.value)
+let version=0
+function choosePercent(value){percent.value=value;amount.value=Math.min(maxTip.value,Math.round(bill.value*value/100/currencyStep(currency.value))*currencyStep(currency.value))}
+async function load(){
+ const current=++version;loading.value=true;error.value='';paid.value=null;state.value='welcome'
+ try{
+  const result=route.params.merchantId?await api.resolveRestaurant(route.params.merchantId,route.query.qr||''):await api.resolveQr(route.params.id)
+  if(current!==version)return
+  data.value=result;applyRestaurantLanguage(result.merchant.language);choosePercent(10)
+  const resumed=await api.resumePayment(result.qr.id,result.employees.map(e=>e.id))
+  if(current!==version)return
+  if(resumed){paid.value=resumed;amount.value=resumed.amount;state.value=resumed.status==='created'?'confirm':resumed.status}
+ }catch(e){if(current===version){error.value=e.message;state.value='invalid'}}finally{if(current===version)loading.value=false}
 }
-watch(() => [route.params.merchantId, route.params.id, route.query.qr], () => { controller?.abort(); scenario.value = 'success'; load() }, { immediate: true })
-function select(person) { selectedId.value = person.id; setPreset(presets.value[Math.min(1,presets.value.length-1)]); error.value = ''; state.value = 'form' }
-function scenarioChange() {
-  error.value = ''
-  if (scenario.value === 'invalid') { state.value = 'invalid'; error.value = 'Этот QR-код не найден или больше не действует.' }
-  else if (data.value) state.value = employee.value ? 'form' : 'choose'
-  else load()
+watch(()=>[route.params.merchantId,route.params.id,route.query.qr],load,{immediate:true})
+async function prepare(){
+ if(busy.value||!amountValid.value)return
+ busy.value=true;error.value=''
+ try{paid.value=await api.preparePayment({qrId:data.value.qr.id,employeeId:employee.value.id,receiptId:data.value.qr.receipt.id,amount:Number(amount.value),currency:currency.value,scenario:scenario.value});state.value=paid.value.status==='created'?'confirm':paid.value.status}
+ catch(e){error.value=e.message}finally{busy.value=false}
 }
-async function pay() {
-  if (!amountValid.value || !employee.value || state.value === 'processing') return
-  state.value = 'processing'; cancelling.value = false; error.value = ''; controller = new AbortController()
-  try {
-    const result = await api.pay({ qrId: data.value.qr.id, employeeId: employee.value.id, amount: Number(amount.value), currency:currency.value, scenario: scenario.value, signal: controller.signal })
-    paid.value = result; state.value = result.status
-    if (result.status === 'success' && result.goalId === employee.value?.goal?.id && employee.value.goal.currency === result.currency) {
-      employee.value.goal.raised += Number(result.amount)
-    }
-    if (store.session) store.load().catch(() => {})
-  } catch (e) { error.value = e.message; state.value = e.code === 'INVALID_QR' ? 'invalid' : 'error' }
+async function confirm(){
+ if(busy.value)return
+ busy.value=true;state.value='processing';error.value=''
+ try{paid.value=await api.confirmPayment(paid.value.publicToken,{wait:scenario.value!=='pending'});state.value=paid.value.status}
+ catch(e){error.value=e.message;state.value='uncertain'}finally{busy.value=false}
 }
-async function checkPending(cancelPayment=false){if(!paid.value?.publicToken||checking.value)return;checking.value=true;error.value='';try{const result=cancelPayment?await api.cancelPayment(paid.value.publicToken):await api.checkPayment(paid.value.publicToken);paid.value=result;state.value=result.status;if(store.session)await store.load()}catch(e){error.value=e.message}finally{checking.value=false}}
-function cancel() { cancelling.value = true; controller?.abort() }
-async function retry() { scenario.value = 'success'; await load() }
-onBeforeRouteLeave(() => state.value === 'processing' ? false : true)
-onBeforeUnmount(() => { controller?.abort(); loadVersion++ })
+async function cancel(){
+ if(busy.value)return
+ busy.value=true;error.value=''
+ try{if(paid.value?.status==='created'){paid.value=await api.cancelPayment(paid.value.publicToken);state.value=paid.value.status}else state.value='cancelled'}
+ catch(e){error.value=e.message}finally{busy.value=false}
+}
+async function checkStatus(){
+ if(busy.value||!paid.value?.publicToken)return
+ busy.value=true;error.value=''
+ try{paid.value=await api.checkPayment(paid.value.publicToken);state.value=paid.value.status==='created'?'confirm':paid.value.status}catch(e){error.value=e.message}finally{busy.value=false}
+}
+onBeforeRouteLeave(()=>!busy.value)
 </script>
 <template>
-  <main class="pay-page">
-    <header v-if="state!=='success'" class="pay-header"><BrandLogo/><LanguageSwitcher/><span><ShieldCheck :size="15"/>{{ $t('Без регистрации для гостей') }}</span></header>
-    <div class="pay-layout">
-
-      <div class="pay-right">
-        <section class="pay-card" aria-live="polite">
-          <div v-if="loading" class="empty"><span class="spinner"></span><h3>{{ $t('Открываем ресторан…') }}</h3></div>
-          <template v-else-if="['choose','form'].includes(state) && data">
-            <div class="pay-restaurant"><span class="restaurant-symbol"><Coffee :size="19"/></span>{{ data.merchant.name }}<span class="tag">{{ $t('ресторан') }}</span></div>
-            <template v-if="state === 'choose'">
-              <div class="restaurant-welcome"><h2>{{ $t('Выберите сотрудника') }}</h2><p>{{ $t('Чаевые получит выбранный сотрудник. Регистрация не нужна.') }}</p></div>
-              <div v-if="!data.employees.length" class="empty compact"><UsersRound :size="32"/><h3>{{ $t('Команда скоро появится') }}</h3><p>{{ $t('Ресторан ещё не добавил активных сотрудников. Попросите администратора ресторана добавить сотрудников.') }}</p><button class="btn btn-outline" @click="load">{{ $t('Обновить') }}</button></div>
-              <div class="restaurant-team">
-                <button v-for="person in data.employees" :key="person.id" class="restaurant-person" @click="select(person)">
-                  <div class="restaurant-person-head"><span class="avatar" :class="person.color">{{ initials(person.name) }}</span><div><strong>{{ person.name }}</strong><small>{{ person.role }}</small></div><ArrowRight :size="18"/></div>
-                  <GoalProgress v-if="person.goal" :goal="person.goal"/><p v-else class="person-no-goal">{{ $t('Сказать спасибо за хороший сервис') }}</p>
-                </button>
-              </div>
-              <p class="pay-safe"><ShieldCheck :size="14"/>{{ $t('Аккаунт гостя не нужен · демооплата') }}</p>
-            </template>
-            <template v-else-if="employee">
-              <button v-if="!data.qr.employeeId" class="text-link pay-back" @click="state='choose';selectedId=''" ><ArrowLeft :size="15"/>{{ $t('Выбрать другого сотрудника') }}</button>
-              <div class="pay-person"><span class="avatar pay-avatar" :class="employee.color">{{ initials(employee.name) }}</span><h2>{{ employee.name }}</h2><p>{{ $t(employee.role) }}</p></div>
-              <GoalProgress :goal="employee.goal"/><p v-if="employee.goal && employee.goal.currency!==currency" class="muted small-text">{{ $t('Цель в {goalCurrency}. Эти чаевые в {currency} сохранятся в статистике, но не изменят прогресс цели.',{goalCurrency:employee.goal.currency,currency}) }}</p>
-              <h3 class="pay-choose">{{ $t('Сумма чаевых') }}</h3>
-              <div class="tip-options"><button v-for="preset in presets" :key="preset.label" @click="setPreset(preset)" :class="{selected:Number(amount)===preset.amount}">{{ preset.label }}</button></div>
-              <label class="custom-amount">{{ $t('Или своя сумма') }}<div><input v-model="amount" type="number" :min="currencyStep(currency)" max="10000000" :step="currencyStep(currency)" inputmode="numeric" :aria-label="$t('Своя сумма чаевых')"><span>{{ currencySymbol(currency) }} {{ currency }}</span></div></label>
-              <p v-if="!amountValid" class="error-text">{{ $t('Введите сумму от') }} {{ currencyStep(currency) }} {{ $t('до 10 000 000') }} {{ currency }}.</p>
-              <div class="pay-total"><span>{{ $t('Ваши чаевые') }}</span><strong>{{ payMoney(Number(amount)||0) }}</strong></div>
-              <button class="btn btn-primary pay-submit" :disabled="!amountValid" @click="pay">{{ $t('Оплатить чаевые') }}<ArrowRight :size="19"/></button>
-              <p class="pay-safe"><ShieldCheck :size="14"/>{{ $t('Демо: деньги не списываются') }}</p><button class="text-link pay-cancel" @click="state='cancelled'">{{ $t('Отменить') }}</button>
-            </template>
-          </template>
-          <div v-else-if="state==='processing'" class="pay-result"><div class="result-icon processing"><span class="spinner"></span></div><h2>{{ $t('Обработка платежа') }}</h2><p>{{ $t('Обрабатываем демоплатёж') }} {{ payMoney(amount) }}.<br>{{ $t('Это займёт пару секунд.') }}</p><button class="btn btn-outline full" @click="cancel" :disabled="cancelling">{{ cancelling?$t('Отменяем…'):$t('Отменить оплату') }}</button></div>
-          <div v-else-if="state==='pending'" class="pay-result"><div class="result-icon processing"><ShieldCheck :size="30"/></div><h2>{{ $t('Ожидаем подтверждение') }}</h2><p>{{ $t('Платёж') }} {{ payMoney(paid?.amount) }} {{ $t('создан на сервере. Подтверждение ещё не получено.') }}</p><p v-if="error" class="error-text" role="alert">{{ $t(error) }}</p><button class="btn btn-primary full" :disabled="checking" @click="checkPending()">{{ checking?$t('Проверяем…'):$t('Проверить статус') }}</button><button class="btn btn-outline full" :disabled="checking" @click="checkPending(true)">{{ $t('Отменить платёж') }}</button></div>
-          <div v-else-if="state==='success'" class="pay-result"><div class="result-icon success"><Check :size="38"/></div><h2>{{ $t('Спасибо за чаевые!') }}</h2><p>{{ $t('Вы отправили {amount} сотруднику {name}.', {amount:payMoney(paid?.amount),name:employee?.name}) }}</p><p>{{ $t('Спасибо, что цените нашу работу. Хорошего вам дня!') }}</p><p class="muted small-text">{{ $t('Оплата завершена. Эту страницу можно закрыть.') }}</p></div>
-          <div v-else class="pay-result"><div class="result-icon" :class="state==='cancelled'?'neutral':'warning'"><X v-if="state==='cancelled'" :size="34"/><AlertCircle v-else :size="34"/></div><h2>{{ state==='cancelled'?$t('Оплата отменена'):state==='declined'?$t('Не получилось оплатить'):state==='invalid'?$t('QR-код недействителен'):$t('Что-то пошло не так') }}</h2><p>{{ state==='cancelled'?$t('Вы отменили оплату. Деньги не списывались.'):state==='declined'?(paid?.errorCode==='QR_USED'?$t('QR-код уже использован. Попросите новый код у ресторана.'):paid?.errorCode==='QR_EXPIRED'?$t('Срок действия QR-кода истёк. Попросите новый код у ресторана.'):$t('Демобанк отклонил платёж. Вы можете попробовать снова.')):$t(error) }}</p><p v-if="state==='invalid'" class="muted small-text">{{ $t('Попросите ресторан показать действующий QR-код.') }}</p><button v-if="data" class="btn btn-primary full" @click="retry"><RotateCcw :size="17"/>{{ $t('Вернуться к ресторану') }}</button><RouterLink v-else to="/" class="btn btn-outline full">{{ $t('На главную') }}</RouterLink></div>
-        </section>
-        <details v-if="data?.demoControls && state!=='success'" class="demo-controls"><summary>{{ $t('Настройки демооплаты') }}</summary><label>{{ $t('Сценарий оплаты') }}<select v-model="scenario" @change="scenarioChange" :disabled="loading || ['processing','pending'].includes(state)"><option value="success">{{ $t('Успешная оплата') }}</option><option value="pending">{{ $t('Ожидание подтверждения') }}</option><option value="declined">{{ $t('Отказ банка') }}</option><option value="invalid">{{ $t('Недействительный QR') }}</option><option value="cancelled">{{ $t('Отмена платежа') }}</option></select></label><p>{{ $t('QR привязан к сотруднику и действует 24 часа. После успеха он больше не принимает платежи. Отказ и отмена не увеличивают чаевые.') }}</p></details>
-      </div>
-    </div><footer v-if="state!=='success'" class="pay-footer">{{ $t('Работает на') }} <strong>tipro.</strong><span>{{ $t('Демонстрационная оплата') }}</span></footer>
-  </main>
+ <main class="pay-page">
+  <header v-if="state!=='success'" class="pay-header"><BrandLogo/><LanguageSwitcher/><span><ShieldCheck :size="15"/>{{ $t('Без регистрации для гостей') }}</span></header>
+  <div class="pay-layout"><div class="pay-right"><section class="pay-card" aria-live="polite">
+   <div v-if="loading" class="empty"><span class="spinner"></span>{{ $t('Открываем ресторан…') }}</div>
+   <template v-else-if="data&&['welcome','form','confirm'].includes(state)">
+    <div class="pay-restaurant"><Coffee :size="19"/>{{ data.merchant.name }}</div>
+    <div class="pay-person"><span class="avatar pay-avatar" :class="employee?.color">{{ initials(employee?.name||'') }}</span><h2>{{ employee?.name }}</h2><p>{{ $t(employee?.role) }}</p></div>
+    <p class="muted">{{ $t('Чек') }} № {{ data.qr.receipt.number }}</p>
+    <div class="pay-total"><span>{{ $t('Сумма чека') }}</span><strong>{{ fmt(bill) }}</strong></div>
+    <template v-if="state==='welcome'"><GoalProgress :goal="employee?.goal"/><p class="pay-intro">{{ $t('На следующем шаге выберите сумму чаевых.') }}</p><button class="btn btn-primary full" @click="state='form'">{{ $t('Продолжить') }}<ArrowRight :size="18"/></button></template>
+    <template v-else-if="state==='form'">
+     <h3 class="pay-choose">{{ $t('Чаевые') }}</h3><div class="tip-options"><button v-for="p in presets" :key="p" :class="{selected:percent===p}" @click="choosePercent(p)">{{ p }}%</button></div>
+     <label class="custom-amount">{{ $t('Или своя сумма') }}<div><input v-model="amount" @input="percent=null" type="number" min="0" :max="maxTip" :step="currencyStep(currency)" inputmode="decimal"><span>{{ currencySymbol(currency) }}</span></div></label>
+     <p v-if="!amountValid" class="error-text">{{ $t('Чаевые должны составлять от 0 до 50% суммы чека.') }}</p>
+     <div class="pay-total"><span>{{ $t('Итого к оплате') }}</span><strong>{{ fmt(total) }}</strong></div>
+     <button class="btn btn-primary full" :disabled="busy||!amountValid" @click="prepare">{{ $t('Перейти к подтверждению') }}</button><button class="text-link pay-cancel" :disabled="busy" @click="cancel">{{ $t('Отменить') }}</button>
+    </template>
+    <template v-else><h3>{{ $t('Подтверждение оплаты') }}</h3><div class="pay-total"><span>{{ $t('Чаевые') }}</span><strong>{{ fmt(paid.amount) }}</strong></div><div class="pay-total"><span>{{ $t('Итого к оплате') }}</span><strong>{{ fmt(paid.amountTotal) }}</strong></div><button class="btn btn-primary full" :disabled="busy" @click="confirm">{{ $t('Подтвердить оплату') }}</button><button class="btn btn-outline full" :disabled="busy" @click="cancel">{{ $t('Отменить платёж') }}</button></template>
+    <p class="pay-safe"><ShieldCheck :size="14"/>{{ $t('Демо: деньги не списываются') }}</p>
+   </template>
+   <div v-else-if="state==='processing'" class="pay-result"><span class="spinner"></span><h2>{{ $t('Обработка платежа') }}</h2><p>{{ $t('Это займёт пару секунд.') }}</p></div>
+   <div v-else-if="['pending','uncertain'].includes(state)" class="pay-result"><h2>{{ $t('Ожидаем подтверждение') }}</h2><p>{{ $t('Обрабатываем, проверьте через минуту') }}</p><button class="btn btn-primary full" :disabled="busy" @click="checkStatus">{{ $t('Проверить статус') }}</button></div>
+   <div v-else-if="state==='success'" class="pay-result"><div class="result-icon success"><Check :size="38"/></div><h2>{{ $t('Спасибо за чаевые!') }}</h2><p>{{ $t('Вы отправили {amount} сотруднику {name}.',{amount:fmt(paid?.amount),name:employee?.name}) }}</p><p>{{ $t('Оплата завершена. Эту страницу можно закрыть.') }}</p></div>
+   <div v-else class="pay-result"><div class="result-icon warning"><AlertCircle :size="34"/></div><h2>{{ state==='cancelled'?$t('Оплата отменена'):state==='declined'?$t('Не получилось оплатить'):$t('QR-код недействителен') }}</h2><p>{{ state==='cancelled'?$t('Вы отменили оплату. Деньги не списывались.'):state==='declined'?$t(paid?.errorCode==='QR_EXPIRED'?'Срок действия QR-кода истёк. Попросите новый код у ресторана.':paid?.errorCode==='MERCHANT_BLOCKED'?'Ресторан заблокирован.':'Демобанк отклонил платёж. Вы можете попробовать снова.'):$t(error) }}</p><button v-if="data&&['cancelled','declined'].includes(state)" class="btn btn-outline full" @click="load">{{ $t('Попробовать снова') }}</button></div>
+   <p v-if="error&&state!=='invalid'" class="error-text" role="alert">{{ $t(error) }}</p>
+  </section>
+  <details v-if="data?.demoControls&&['welcome','form'].includes(state)" class="demo-controls"><summary>{{ $t('Настройки демооплаты') }}</summary><label>{{ $t('Сценарий оплаты') }}<select v-model="scenario" :disabled="busy"><option value="success">{{ $t('Успешная оплата') }}</option><option value="declined">{{ $t('Отказ банка') }}</option><option value="pending">{{ $t('Ожидание подтверждения') }}</option></select></label></details>
+  </div></div><footer v-if="state!=='success'" class="pay-footer">{{ $t('Демонстрационная оплата') }}</footer>
+ </main>
 </template>

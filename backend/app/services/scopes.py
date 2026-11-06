@@ -39,7 +39,7 @@ def payment_conditions(user, currency=None, start: date | None = None, end: date
     if start: conditions.append(Payment.created_at >= func.timezone(time_zone, literal(datetime.combine(start, time.min), type_=DateTime(timezone=False))))
     if end: conditions.append(Payment.created_at < func.timezone(time_zone, literal(datetime.combine(end + timedelta(days=1), time.min), type_=DateTime(timezone=False))))
     if status:
-        statuses = {'success':'SUCCESS','declined':'DECLINED','cancelled':'CANCELED','pending':'PENDING'}
+        statuses = {'created':'CREATED','success':'SUCCESS','declined':'DECLINED','cancelled':'CANCELED','pending':'PENDING'}
         if status not in statuses: raise ApiError('Неизвестный статус.')
         conditions.append(Payment.status == statuses[status])
     return conditions

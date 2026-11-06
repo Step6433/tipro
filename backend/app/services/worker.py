@@ -10,7 +10,7 @@ async def demo_confirmation_loop():
     while True:
         try:
             async with SessionLocal() as db:
-                rows=await db.scalars(select(Payment).where(Payment.status=='PENDING',Payment.provider=='demo',or_(Payment.provider_due_at<=utcnow(),Payment.qr_expires_at<=utcnow())).with_for_update(skip_locked=True).limit(100))
+                rows=await db.scalars(select(Payment).where(Payment.status.in_(['CREATED','PENDING']),Payment.provider=='demo',or_(Payment.provider_due_at<=utcnow(),Payment.qr_expires_at<=utcnow())).with_for_update(skip_locked=True).limit(100))
                 for payment in rows:await reconcile(db,payment)
                 await db.commit()
         except asyncio.CancelledError:raise

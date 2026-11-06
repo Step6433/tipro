@@ -2,7 +2,7 @@ import { request, allPages, query, setAccessToken } from './http'
 import { browserTimeZone } from '../utils/dates'
 import { createIdempotencyKey } from '../utils/idempotency'
 
-const amountFields = ['amount', 'billAmount', 'target', 'raised', 'total', 'average']
+const amountFields = ['amount', 'billAmount', 'target', 'raised', 'total', 'average', 'amountTotal', 'avgTipPct', 'successRate']
 // Decimal strings stay exact over the wire. Numbers here are for UI display only;
 // the server independently validates and calculates every monetary operation.
 function normalize(value) {
@@ -27,7 +27,7 @@ export const restApi = {
   async capabilities() { return request('/capabilities') },
   async session() {
     try { return (await request('/auth/me')).session }
-    catch (e) { if (e.status === 401) { setAccessToken(null); return null } throw e }
+    catch (e) { if (e.status === 401 || e.code === 'MERCHANT_BLOCKED') { setAccessToken(null); return null } throw e }
   },
   async login({ email, password }) {
     const data = await request('/auth/login', { method: 'POST', body: { email, password } })
@@ -53,11 +53,11 @@ export const restApi = {
     ])
     return normalize({ ...core, employees, qrs, payments, analytics, currency })
   },
-  async saveEmployee({ id, name, role, active = true }) { return normalize(await request(id ? `/employees/${id}` : '/employees', { method: id ? 'PATCH' : 'POST', body: { name, role, active } })) },
+  async saveEmployee({ id, name, role, active = true, paymentDetails = '' }) { return normalize(await request(id ? `/employees/${id}` : '/employees', { method: id ? 'PATCH' : 'POST', body: { name, role, active, paymentDetails } })) },
   inviteEmployee: id => request(`/employees/${id}/invitation`, { method: 'POST' }),
   async saveGoal(employeeId, { id, title, target, currency = 'RUB' }) { return normalize(await request(`/employees/${employeeId}/goals${id ? `/${id}` : ''}`, { method: id ? 'PATCH' : 'POST', body: { title, target: String(target), currency } })) },
   activateGoal: (employeeId, goalId) => request(`/employees/${employeeId}/goals/${goalId}/active`, { method: 'PUT' }),
-  async createQr({ employeeId, currency, label } = {}) { return normalize(await request('/qrs', { method: 'POST', body: { employeeId: Number(employeeId), ...(currency ? { currency } : {}), ...(label ? { label } : {}) } })) },
+  async createQr({ employeeId, currency, label, receiptNumber, billAmount } = {}) { return normalize(await request('/qrs', { method: 'POST', body: { employeeId: Number(employeeId), billAmount: String(billAmount), ...(receiptNumber ? { receiptNumber } : {}), ...(currency ? { currency } : {}), ...(label ? { label } : {}) } })) },
   async toggleQr(token) {
     const list = await allPages('/qrs')
     const qr = list.find(q => q.id === token)
@@ -66,16 +66,16 @@ export const restApi = {
   },
   async resolveQr(token) { return normalize(await request(`/public/qrs/${encodeURIComponent(token)}`)) },
   async resolveRestaurant(id, token) { return normalize(await request(`/public/restaurants/${id}` + query({ qr: token }))) },
-  async pay({ qrId, employeeId, amount, percent, currency = 'RUB', scenario = 'success', signal }) {
+  async preparePayment({ qrId, employeeId, receiptId, amount, percent, currency = 'RUB', scenario = 'success' }) {
     const key = attemptKey(qrId, employeeId)
-    const body = { employeeId: Number(employeeId), ...(percent !== undefined ? { percent: String(percent) } : { amount: String(amount) }), currency, scenario, method: 'demo' }
+    const body = { employeeId: Number(employeeId), receiptId: Number(receiptId), ...(percent !== undefined ? { percent: String(percent) } : { amount: String(amount) }), currency, scenario, method: 'demo' }
     const fingerprint = JSON.stringify(body)
     let attempt = getAttempt(key)
     if (attempt && attempt.fingerprint !== fingerprint) {
       // Resolve an uncertain previous attempt before allowing another amount.
       if (!attempt.publicToken) throw new Error('Предыдущий запрос не подтверждён. Повторите с прежней суммой и сценарием.')
       const previous = await request(`/public/payments/${attempt.publicToken}`)
-      if (previous.status === 'pending') throw new Error('Предыдущий платёж ещё ожидает подтверждения. Сначала проверьте или отмените его.')
+      if (['created','pending'].includes(previous.status)) throw new Error('Предыдущий платёж ещё ожидает подтверждения. Сначала проверьте или отмените его.')
       removeAttempt(key); attempt = null
     }
     if (!attempt) { attempt = { idempotencyKey: createIdempotencyKey(), fingerprint }; saveAttempt(key, attempt) }
@@ -83,15 +83,20 @@ export const restApi = {
     try { payment = await request(`/public/qrs/${encodeURIComponent(qrId)}/payments`, { method: 'POST', headers: { 'Idempotency-Key': attempt.idempotencyKey }, body }) }
     catch(e) { if(e.status && e.status < 500 && e.status !== 409)removeAttempt(key); throw e }
     attempt.publicToken = payment.publicToken; saveAttempt(key, attempt)
-    let result = payment
-    for (let i = 0; i < 12 && result.status === 'pending'; i++) {
-      if (signal?.aborted) { result = await this.cancelPayment(result.publicToken); break }
-      if (scenario === 'pending') break
-      await sleep(300)
-      result = await this.checkPayment(result.publicToken)
+    return normalize(payment)
+  },
+  async confirmPayment(token, { wait = true } = {}) {
+    let result = await request(`/public/payments/${encodeURIComponent(token)}/confirm`, { method: 'POST' })
+    for (let i=0; wait && i<12 && result.status==='pending';i++) {
+      await sleep(300); result=await this.checkPayment(token)
     }
-    if (result.status !== 'pending') removeAttempt(key)
+    if (!['created','pending'].includes(result.status)) clearPaymentToken(token)
     return normalize(result)
+  },
+  async pay(options) {
+    const payment = await this.preparePayment(options)
+    if (options.signal?.aborted && payment.status==='created') return this.cancelPayment(payment.publicToken)
+    return this.confirmPayment(payment.publicToken, {wait: options.scenario!=='pending'})
   },
   async resumePayment(qrId, employeeIds) {
     for (const employeeId of employeeIds) {
@@ -102,19 +107,21 @@ export const restApi = {
         attempt.publicToken = payment.publicToken; saveAttempt(key, attempt)
       }
       const payment = await this.checkPayment(attempt.publicToken)
-      if (payment.status !== 'pending') removeAttempt(key)
+      if (!['created','pending'].includes(payment.status)) removeAttempt(key)
       return payment
     }
     return null
   },
-  async checkPayment(token) { const result=normalize(await request(`/public/payments/${encodeURIComponent(token)}`)); if(result.status!=='pending')clearPaymentToken(token); return result },
-  async cancelPayment(token) { const result=normalize(await request(`/public/payments/${encodeURIComponent(token)}/cancel`, { method: 'POST' })); if(result.status!=='pending')clearPaymentToken(token); return result },
+  async checkPayment(token) { const result=normalize(await request(`/public/payments/${encodeURIComponent(token)}`)); if(!['created','pending'].includes(result.status))clearPaymentToken(token); return result },
+  async cancelPayment(token) { const result=normalize(await request(`/public/payments/${encodeURIComponent(token)}/cancel`, { method: 'POST' })); if(!['created','pending'].includes(result.status))clearPaymentToken(token); return result },
   async analytics(filters = {}) { return normalize(await request('/analytics' + query({timezone:browserTimeZone(),...filters}))) },
   async settings(id, body) { return request(`/restaurants/${id}/settings`, { method: 'PATCH', body }) },
   async exportPayments(filters = {}) {
     const response = await request('/payments/export' + query({timezone:browserTimeZone(),...filters}), { raw: true })
     return response.blob()
   },
+  blockRestaurant: id => request(`/admin/restaurants/${encodeURIComponent(id)}/block`, { method: 'POST' }),
+  unblockRestaurant: id => request(`/admin/restaurants/${encodeURIComponent(id)}/unblock`, { method: 'POST' }),
   approveRestaurant: id => request(`/admin/restaurants/${encodeURIComponent(id)}/approve`, { method: 'POST' }),
   async admin({ currency = 'RUB' } = {}) {
     const timezone=browserTimeZone()

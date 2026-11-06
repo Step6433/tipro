@@ -295,6 +295,7 @@ select { cursor: pointer; }
 .pay-total { border-top: 1px solid var(--border); margin-top: 25px; padding: 20px 0; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #6d7568; }
 .pay-total strong { font-size: 26px; font-weight: 500; color: #506d37; letter-spacing: -.7px; }
 .pay-submit { width: 100%; justify-content: space-between; padding: 14px 17px; }
+.pay-intro { max-width: 32ch; margin: 24px auto 16px; color: var(--muted, #6d7568); font-size: 12px; line-height: 1.6; text-align: center; }
 .pay-safe { display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 10px; color: #6d7568; margin-top: 17px; }
 .pay-cancel { display: flex; justify-content: center; margin: 17px auto 0; color: #6d7568; font-size: 11px; }
 .pay-result { text-align: center; padding: 23px 0; }

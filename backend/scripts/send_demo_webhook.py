@@ -21,7 +21,7 @@ async def main():
     async with SessionLocal() as db:
         payment=await db.get(Payment,args.payment_id)
         if not payment or payment.provider!='demo':raise SystemExit('Demo payment not found.')
-        body={'event_id':f'operator-{payment.payment_id}-{args.status}','external_id':payment.external_id,'amount':str(payment.tip),'currency':payment.currency,'status':args.status}
+        body={'event_id':f'operator-{payment.payment_id}-{args.status}','external_id':payment.external_id,'amount':str(payment.amount+payment.tip),'currency':payment.currency,'status':args.status}
     raw=json.dumps(body,separators=(',',':')).encode();stamp=str(int(time.time()))
     signature=hmac.new(get_settings().webhook_secret.get_secret_value().encode(),stamp.encode()+b'.'+raw,hashlib.sha256).hexdigest()
     async with httpx.AsyncClient() as client:

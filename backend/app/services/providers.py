@@ -35,6 +35,6 @@ class DemoProvider:
 
     async def status(self, external_id: str, outcome: str, due_at: datetime | None) -> str:
         if due_at is None or due_at > utcnow(): return 'PENDING'
-        return {'success':'SUCCESS','declined':'DECLINED','cancelled':'CANCELED'}.get(outcome,'PENDING')
+        return {'success':'SUCCESS','declined':'DECLINED'}.get(outcome,'PENDING')
 
 PROVIDERS: dict[str, PaymentProvider] = {'demo': DemoProvider()}

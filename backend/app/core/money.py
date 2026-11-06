@@ -1,4 +1,4 @@
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, ROUND_DOWN
 from app.core.errors import ApiError
 
 # ISO 4217 fractional digits. IDR uses 2; VND uses 0.
@@ -17,8 +17,10 @@ def money(value, currency: str, minimum=Decimal('0.01'), maximum=Decimal('100000
             raise ApiError(f'Для {currency} допустимо знаков после запятой: {CURRENCIES[currency]}.')
         return rounded
     except (InvalidOperation, ValueError, TypeError):
-        raise ApiError('Недопустимая денежная сумма.')
+        raise ApiError('Недопустимая денежная сумма.','AMOUNT_OUT_OF_RANGE',422)
 
 def percent_tip(bill: Decimal, percent: Decimal, currency: str) -> Decimal:
     value = (bill * percent / Decimal(100)).quantize(Decimal(1).scaleb(-CURRENCIES[currency]), rounding=ROUND_HALF_UP)
-    return money(value, currency)
+    # Do not round an odd minor unit above the strict 50% cap.
+    cap=(bill*Decimal('.5')).quantize(Decimal(1).scaleb(-CURRENCIES[currency]),rounding=ROUND_DOWN)
+    return money(min(value,cap), currency, minimum=Decimal(0))

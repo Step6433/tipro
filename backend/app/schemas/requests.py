@@ -21,6 +21,7 @@ class EmployeeInput(Input):
     name: str = Field(min_length=2, max_length=80)
     role: str = Field(min_length=1, max_length=60)
     active: bool = True
+    payment_details: str = Field(default='', alias='paymentDetails', pattern=r'^(?:|\*{4}[0-9]{4})$')
 
 class GoalInput(Input):
     title: str = Field(min_length=1, max_length=100)
@@ -30,7 +31,7 @@ class GoalInput(Input):
 class QrInput(Input):
     label: str | None = Field(default=None, max_length=80)
     receipt_number: str | None = Field(default=None, alias='receiptNumber', min_length=1, max_length=40)
-    bill_amount: Decimal | None = Field(default=None, alias='billAmount')
+    bill_amount: Decimal = Field(alias='billAmount')
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     expires_in_days: Literal[1] | None = Field(default=None, alias='expiresInDays')
     employee_id: int = Field(alias='employeeId', gt=0)
@@ -41,13 +42,17 @@ class QrUpdate(Input):
 class PaymentInput(Input):
     employee_id: int = Field(alias='employeeId', gt=0)
     amount: Decimal | None = None
-    percent: Decimal | None = Field(default=None, gt=0, le=100)
+    percent: Decimal | None = None
     currency: str
     scenario: Literal['success', 'declined', 'pending', 'cancelled'] = 'success'
     method: Literal['demo'] = 'demo'
+    receipt_id: int = Field(alias='receiptId', gt=0)
 
     @model_validator(mode='after')
     def one_amount(self):
+        if self.percent is not None and (not self.percent.is_finite() or not 0 <= self.percent <= 50):
+            from app.core.errors import ApiError
+            raise ApiError('Процент чаевых должен быть от 0 до 50.','TIP_OUT_OF_RANGE',422)
         if (self.amount is None) == (self.percent is None):
             raise ValueError('Specify amount OR percent')
         return self

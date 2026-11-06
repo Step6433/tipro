@@ -55,9 +55,14 @@ async def fixture(client,currency='RUB'):
     return owner,worker,employee,qr
 
 async def pay(client,qr,employee,amount='100',scenario='success',key=None,**extra):
-    body={'employeeId':int(employee['id']),'currency':qr['currency'],'scenario':scenario,**extra}
+    body={'employeeId':int(employee['id']),'receiptId':int(qr['receipt']['id']),'currency':qr['currency'],'scenario':scenario,**extra}
     if 'percent' not in extra:body['amount']=amount
-    return await client.post(f"/api/public/qrs/{qr['id']}/payments",headers={'Idempotency-Key':key or str(uuid.uuid4())},json=body)
+    response=await client.post(f"/api/public/qrs/{qr['id']}/payments",headers={'Idempotency-Key':key or str(uuid.uuid4())},json=body)
+    if response.status_code in (200,201) and response.json()['status']=='created':
+        confirmed=await client.post('/api/public/payments/'+response.json()['publicToken']+'/confirm')
+        assert confirmed.status_code==200,confirmed.text
+        response._content=confirmed.content
+    return response
 
 async def finish(client,payment):
     await asyncio.sleep(.04)
@@ -105,13 +110,13 @@ async def test_public_qr_expiry_tampering_currency_and_employee(client,monkeypat
     public=await client.get(f"/api/public/restaurants/{qr['merchantId']}?qr={qr['id']}")
     assert public.status_code==200
     body=public.json();assert body['employees'][0]['id']==e['id'];assert 'email' not in body['merchant'];assert 'accessToken' not in body['employees'][0]
-    assert (await client.get('/api/public/qrs/'+qr['id']+'x')).status_code==404
-    assert (await client.get(f"/api/public/restaurants/999?qr={qr['id']}")).status_code==404
-    assert (await pay(client,qr,{'id':'999'})).status_code==400
+    assert (await client.get('/api/public/qrs/'+qr['id']+'x')).status_code==422
+    assert (await client.get(f"/api/public/restaurants/999?qr={qr['id']}")).status_code==422
+    assert (await pay(client,qr,{'id':'999'})).status_code==422
     assert (await pay(client,qr,e,currency='SGD')).status_code==400
     future=utcnow()+timedelta(hours=24,seconds=1)
     monkeypatch.setattr('app.routers.qrs.utcnow',lambda:future)
-    assert (await client.get('/api/public/qrs/'+qr['id'])).status_code==404
+    assert (await client.get('/api/public/qrs/'+qr['id'])).status_code==410
 
 async def test_goal_success_and_idempotency_credit_exactly_once(client):
     owner,worker,e,qr=await fixture(client,'SGD')
@@ -148,11 +153,13 @@ async def test_pending_declined_cancelled_percent_and_fraction_digits(client):
         assert (await finish(client,created.json()))['status']==expected
     pending=(await pay(client,qr,e,'100','pending')).json()
     assert (await finish(client,pending))['status']=='pending'
-    assert (await client.post('/api/public/payments/'+pending['publicToken']+'/cancel')).json()['status']=='cancelled'
+    cancelled=await client.post('/api/public/payments/'+pending['publicToken']+'/cancel')
+    assert cancelled.status_code==409 and cancelled.json()['code']=='CANCEL_NOT_ALLOWED'
+    qr=(await client.post('/api/qrs',headers=auth(owner),json={'employeeId':int(e['id']),'billAmount':'2800'})).json()
     percent=await pay(client,qr,e,percent='10');assert percent.status_code==201,percent.text
     assert Decimal(percent.json()['amount'])==Decimal('280')
     assert (await pay(client,qr,e,'1.001')).status_code==400
-    assert (await pay(client,qr,e,'0')).status_code==400
+    assert (await pay(client,qr,e,'-1')).status_code==422
     assert (await pay(client,qr,e,'NaN')).status_code==422
 
 async def test_webhook_signature_replay_and_goal_credit(client):
@@ -160,7 +167,7 @@ async def test_webhook_signature_replay_and_goal_credit(client):
     await client.post(f"/api/employees/{e['id']}/goals",headers=auth(worker),json={'title':'Мечта','target':'2000','currency':'RUB'})
     pending=(await pay(client,qr,e,'50','pending')).json()
     async with SessionLocal() as db:external=await db.scalar(select(Payment.external_id).where(Payment.payment_id==int(pending['id'])))
-    event={'event_id':'event-1','external_id':external,'status':'success','amount':'50','currency':'RUB'}
+    event={'event_id':'event-1','external_id':external,'status':'success','amount':'2850','currency':'RUB'}
     raw=json.dumps(event).encode();stamp=str(int(time.time()))
     signature=hmac.new(get_settings().webhook_secret.get_secret_value().encode(),stamp.encode()+b'.'+raw,hashlib.sha256).hexdigest()
     headers={'Content-Type':'application/json','X-Webhook-Timestamp':stamp,'X-Webhook-Signature':signature}
@@ -193,7 +200,7 @@ async def test_deactivation_expired_sessions_and_origin(client):
     owner,worker,e,qr=await fixture(client)
     assert (await client.patch('/api/employees/'+e['id'],headers=auth(owner),json={'name':e['name'],'role':e['role'],'active':False})).status_code==200
     assert (await client.get('/api/auth/me',headers=auth(worker))).status_code==401
-    assert (await pay(client,qr,e)).status_code==404
+    assert (await pay(client,qr,e)).status_code==403
     forbidden=await client.post('/api/auth/login',json={'email':'owner@example.com','password':PASSWORD},headers={'Origin':'https://attacker.invalid'})
     assert forbidden.status_code==403
     async with SessionLocal() as db:
@@ -223,7 +230,7 @@ async def test_migration_preserves_legacy_rows_hashes_passwords_and_repairs_sequ
         conn=await connect(name)
         await conn.execute((ROOT/'schema'/'legacy.sql').read_text())
         await conn.execute("INSERT INTO merchants(merchant_id,name,status) OVERRIDING SYSTEM VALUE VALUES(42,'Legacy','ACTIVE')")
-        await conn.execute("INSERT INTO employees(employee_id,merchant_id,name,payment_details,position,login,password) OVERRIDING SYSTEM VALUE VALUES(90,42,'Legacy manager','','manager','legacy@example.com',$1)",PASSWORD)
+        await conn.execute("INSERT INTO employees(employee_id,merchant_id,name,payment_details,position,login,password) OVERRIDING SYSTEM VALUE VALUES(90,42,'Legacy manager','4111111111111234','manager','legacy@example.com',$1)",PASSWORD)
         await conn.execute("INSERT INTO payments(merchant_id,employee_id,amount,tip,status,timestamp) VALUES(42,90,100,10,'SUCCESS','2025-01-02T03:04:05+07:00')")
         await conn.close()
         env={**os.environ,'DATABASE_URL':ADMIN_URL.set(database=name).render_as_string(hide_password=False)}
@@ -233,6 +240,7 @@ async def test_migration_preserves_legacy_rows_hashes_passwords_and_repairs_sequ
         assert await conn.fetchval('SELECT count(*) FROM payments')==1
         assert await conn.fetchval('SELECT count(*) FROM employees WHERE password IS NOT NULL')==0
         assert (await conn.fetchval('SELECT password_hash FROM employees')).startswith('$argon2id$')
+        assert await conn.fetchval('SELECT payment_details FROM employees')=='****1234'
         assert await conn.fetchval("INSERT INTO merchants(name,status,currency,language,tip_percentages,payment_methods) VALUES('New','ACTIVE','RUB','ru','[5]','[\"demo\"]') RETURNING merchant_id")>42
         date=await conn.fetchval('SELECT created_at FROM payments');assert date.hour==20 and date.day==1
         assert await conn.fetchval("SELECT count(*) FROM information_schema.columns WHERE table_name='qr_links' AND column_name='mecrhant_id'")==1
@@ -254,16 +262,16 @@ async def test_server_confirms_demo_without_browser_polling(client):
 
 async def test_qr_sign_covers_nonce_and_exp_and_database_tampering(client):
     owner,worker,e,qr=await fixture(client)
-    nonce,exp,sign=qr['id'].split('.')
+    merchant,employee,receipt,nonce,exp,sign=qr['id'].split('.')
     assert (nonce,exp,sign)==(qr['nonce'],qr['exp'],qr['sign'])
-    assert (await client.get('/api/public/qrs/'+f'{nonce}.{int(exp)+60}.{sign}')).status_code==404
-    assert (await client.get('/api/public/qrs/'+f'{int(nonce)+1}.{exp}.{sign}')).status_code==404
-    assert (await client.get('/api/public/qrs/'+nonce)).status_code==404
+    assert (await client.get('/api/public/qrs/'+f'{merchant}.{employee}.{receipt}.{nonce}.{int(exp)+60}.{sign}')).status_code==422
+    assert (await client.get('/api/public/qrs/'+f'{merchant}.{employee}.{receipt}.{int(nonce)+1}.{exp}.{sign}')).status_code==422
+    assert (await client.get('/api/public/qrs/'+nonce)).status_code==422
     async with SessionLocal() as db:
         q=await db.scalar(select(QrLink).where(QrLink.nonce==nonce))
         q.exp=str(int(exp)+60)
         await db.commit()
-    assert (await client.get('/api/public/qrs/'+qr['id'])).status_code==404
+    assert (await client.get('/api/public/qrs/'+qr['id'])).status_code==422
 
 async def test_employee_qr_is_single_use_with_concurrent_confirmations(client):
     owner,worker,e,qr=await fixture(client)
@@ -283,8 +291,8 @@ async def test_employee_qr_is_single_use_with_concurrent_confirmations(client):
     assert success['status']=='success'
     detail=(await client.get('/api/employees/'+e['id'],headers=auth(worker))).json()
     assert Decimal(detail['goal']['raised'])==Decimal(success['amount'])
-    assert (await client.get('/api/public/qrs/'+qr['id'])).status_code==404
-    assert (await pay(client,qr,e,'30')).status_code==404
+    assert (await client.get('/api/public/qrs/'+qr['id'])).status_code==409
+    assert (await pay(client,qr,e,'30')).status_code==409
     key=first_key if requests[0].status_code==201 else second_key
     retry=await pay(client,qr,e,success['amount'],key=key)
     assert retry.status_code==200 and retry.json()['id']==success['id']
@@ -302,7 +310,7 @@ async def test_expired_payment_session_rejects_late_webhook_without_goal_credit(
         external=saved.external_id
         deadline=saved.qr_expires_at
     monkeypatch.setattr('app.services.payments.utcnow',lambda:deadline+timedelta(seconds=1))
-    event={'event_id':'late-event','external_id':external,'status':'success','amount':'50','currency':'RUB'}
+    event={'event_id':'late-event','external_id':external,'status':'success','amount':'2850','currency':'RUB'}
     raw=json.dumps(event).encode();stamp=str(int(time.time()))
     signature=hmac.new(get_settings().webhook_secret.get_secret_value().encode(),stamp.encode()+b'.'+raw,hashlib.sha256).hexdigest()
     r=await client.post('/api/webhooks/demo',content=raw,headers={'Content-Type':'application/json','X-Webhook-Timestamp':stamp,'X-Webhook-Signature':signature})
@@ -332,7 +340,7 @@ async def test_international_currencies_and_restaurant_language(client,currency)
     mid=owner['session']['merchantId']
     updated=await client.patch(f'/api/restaurants/{mid}/settings',headers=auth(owner),json={'language':'zh'})
     assert updated.status_code==200,updated.text
-    created=await client.post('/api/qrs',headers=auth(owner),json={'label':'International tips','employeeId':int(e['id'])})
+    created=await client.post('/api/qrs',headers=auth(owner),json={'billAmount':'100','label':'International tips','employeeId':int(e['id'])})
     assert created.status_code==201,created.text
     qr=created.json()
     assert qr['currency']==currency
@@ -359,7 +367,7 @@ async def test_project_sql_schema_restores_into_empty_database():
             assert {'merchants','employees','payments','qr_links','tip_goals','auth_sessions','payment_webhook_events','demo_seed_records','alembic_version'}<=tables
             assert await conn.fetchval('SELECT count(*) FROM public.employees')==0
             assert await conn.fetchval('SELECT count(*) FROM public.payments')==0
-            assert await conn.fetchval('SELECT version_num FROM public.alembic_version')=='0007_employee_qr'
+            assert await conn.fetchval('SELECT version_num FROM public.alembic_version')=='0008_receipt_payments'
             assert await conn.fetchval("INSERT INTO public.merchants(name,status,currency,language,tip_percentages,payment_methods) VALUES('Snapshot test','ACTIVE','RUB','ru','[5]','[\"demo\"]') RETURNING merchant_id")>0
         finally:await conn.close()
         env={**os.environ,'DATABASE_URL':ADMIN_URL.set(database=name).render_as_string(hide_password=False)}
@@ -396,7 +404,7 @@ async def test_restaurant_requires_platform_approval_and_notification_survives_l
     assert (await client.get('/api/admin/notifications',headers=auth(admin))).json()['total']==0
     assert (await client.get('/api/workspace',headers=auth(pending))).status_code==200
     employee=(await client.post('/api/employees',headers=auth(pending),json={'name':'Approved waiter','role':'Waiter'})).json()
-    created=await client.post('/api/qrs',headers=auth(pending),json={'employeeId':int(employee['id'])})
+    created=await client.post('/api/qrs',headers=auth(pending),json={'billAmount':'1000','employeeId':int(employee['id'])})
     assert created.status_code==201,created.text
 
 async def test_pending_status_blocks_preexisting_sessions_and_public_payments(client):
@@ -410,8 +418,8 @@ async def test_pending_status_blocks_preexisting_sessions_and_public_payments(cl
     assert (await client.get('/api/employees',headers=auth(owner))).status_code==403
     assert (await client.get('/api/auth/me',headers=auth(worker))).status_code==403
     assert (await client.post('/api/auth/login',json={'email':'anna@example.com','password':PASSWORD})).status_code==403
-    assert (await client.get('/api/public/qrs/'+qr['id'])).status_code==404
-    assert (await pay(client,qr,e)).status_code==404
+    assert (await client.get('/api/public/qrs/'+qr['id'])).status_code==403
+    assert (await pay(client,qr,e)).status_code==403
     tampered=await client.post('/api/auth/register',json={'role':'merchant','name':'Attacker','restaurantName':'No approval','email':'hack@example.com','password':PASSWORD,'status':'ACTIVE'})
     assert tampered.status_code==422
     async with SessionLocal() as db:assert (await db.get(Merchant,int(mid))).status=='PENDING'
@@ -422,24 +430,24 @@ async def test_qr_requires_employee_and_fixed_24_hour_deadline(client,monkeypatc
     assert (await client.post('/api/qrs',headers=auth(owner),json={})).status_code==422
     assert (await client.post('/api/qrs',headers=auth(owner),json={'employeeId':None})).status_code==422
     for days in [0,2,365]:
-        assert (await client.post('/api/qrs',headers=auth(owner),json={'employeeId':int(e['id']),'expiresInDays':days})).status_code==422
+        assert (await client.post('/api/qrs',headers=auth(owner),json={'billAmount':'1000','employeeId':int(e['id']),'expiresInDays':days})).status_code==422
     other=await register(client,'second-owner@example.com')
     foreign=(await client.post('/api/employees',headers=auth(other),json={'name':'Other employee','role':'Waiter'})).json()
-    assert (await client.post('/api/qrs',headers=auth(owner),json={'employeeId':int(foreign['id'])})).status_code==400
-    response=await client.post('/api/qrs',headers=auth(owner),json={'employeeId':int(e['id'])})
+    assert (await client.post('/api/qrs',headers=auth(owner),json={'billAmount':'1000','employeeId':int(foreign['id'])})).status_code==400
+    response=await client.post('/api/qrs',headers=auth(owner),json={'billAmount':'1000','employeeId':int(e['id'])})
     assert response.status_code==201,response.text
     qr=response.json()
     created=datetime.fromisoformat(qr['createdAt']);expires=datetime.fromisoformat(qr['expiresAt'])
     assert expires-created==timedelta(hours=24)
     assert int(qr['exp'])==int(expires.timestamp())
     second=(await client.post('/api/employees',headers=auth(owner),json={'name':'Another waiter','role':'Waiter'})).json()
-    assert (await pay(client,qr,second)).status_code==400
+    assert (await pay(client,qr,second)).status_code==422
     before=expires-timedelta(microseconds=1)
     monkeypatch.setattr('app.routers.qrs.utcnow',lambda:before)
     assert (await client.get('/api/public/qrs/'+qr['id'])).status_code==200
     monkeypatch.setattr('app.routers.qrs.utcnow',lambda:expires)
-    assert (await client.get('/api/public/qrs/'+qr['id'])).status_code==404
-    assert (await pay(client,qr,e)).status_code==404
+    assert (await client.get('/api/public/qrs/'+qr['id'])).status_code==410
+    assert (await pay(client,qr,e)).status_code==410
     assert (await client.patch('/api/qrs/'+qr['id'],headers=auth(owner),json={'active':True})).status_code==409
 
 @pytest.mark.parametrize('zone,instants',[

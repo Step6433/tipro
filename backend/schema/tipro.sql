@@ -55,7 +55,8 @@ CREATE TYPE public."Payment_status" AS ENUM (
     'SUCCESS',
     'DECLINED',
     'PENDING',
-    'CANCELED'
+    'CANCELED',
+    'CREATED'
 );
 
 
@@ -130,7 +131,8 @@ CREATE TABLE public.employees (
     invite_expires_at timestamp with time zone,
     invite_consumed_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    CONSTRAINT ck_employee_payment_mask CHECK (((payment_details = ''::text) OR (payment_details ~ '^[*]{4}[0-9]{4}$'::text)))
 );
 
 
@@ -140,6 +142,38 @@ CREATE TABLE public.employees (
 
 ALTER TABLE public.employees ALTER COLUMN employee_id ADD GENERATED ALWAYS AS IDENTITY (
     SEQUENCE NAME public."Users_id_seq"
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: audit_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.audit_events (
+    event_id integer NOT NULL,
+    payment_id integer,
+    qr_id integer,
+    merchant_id integer NOT NULL,
+    action character varying(40) NOT NULL,
+    from_status character varying(20),
+    to_status character varying(20) NOT NULL,
+    amount_total numeric(20,4),
+    actor character varying(80) NOT NULL,
+    at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: audit_events_event_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.audit_events ALTER COLUMN event_id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.audit_events_event_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
@@ -249,7 +283,8 @@ CREATE TABLE public.qr_links (
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     used_at timestamp with time zone,
-    CONSTRAINT ck_qr_v2_employee_deadline CHECK ((((token_version)::text <> 'v2'::text) OR ((employee_id IS NOT NULL) AND (expires_at IS NOT NULL) AND (exp <> '0'::text) AND (expires_at = (created_at + '24:00:00'::interval)))))
+    CONSTRAINT ck_qr_v2_employee_deadline CHECK ((((token_version)::text <> 'v2'::text) OR ((employee_id IS NOT NULL) AND (expires_at IS NOT NULL) AND (exp <> '0'::text) AND (expires_at = (created_at + '24:00:00'::interval))))),
+    CONSTRAINT ck_qr_v3_receipt CHECK ((((token_version)::text <> 'v3'::text) OR ((employee_id IS NOT NULL) AND (receipt_id > 0) AND (receipt_number IS NOT NULL) AND (bill_amount IS NOT NULL) AND (bill_amount > (0)::numeric) AND (bill_amount <= (1000000)::numeric) AND (expires_at IS NOT NULL) AND (exp <> '0'::text) AND (expires_at = (created_at + '24:00:00'::interval)))))
 );
 
 
@@ -265,6 +300,18 @@ ALTER TABLE public.qr_links ALTER COLUMN qr_id ADD GENERATED ALWAYS AS IDENTITY 
     NO MAXVALUE
     CACHE 1
 );
+
+
+--
+-- Name: receipt_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.receipt_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
 
 
 --
@@ -312,6 +359,14 @@ ALTER TABLE ONLY public.merchants
 
 ALTER TABLE ONLY public.employees
     ADD CONSTRAINT "Users_pkey" PRIMARY KEY (employee_id);
+
+
+--
+-- Name: audit_events audit_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_events
+    ADD CONSTRAINT audit_events_pkey PRIMARY KEY (event_id);
 
 
 --
@@ -395,6 +450,20 @@ ALTER TABLE ONLY public.payments
 
 
 --
+-- Name: ix_audit_events_merchant_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_audit_events_merchant_id ON public.audit_events USING btree (merchant_id);
+
+
+--
+-- Name: ix_audit_events_payment_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_audit_events_payment_id ON public.audit_events USING btree (payment_id);
+
+
+--
 -- Name: ix_auth_sessions_employee_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -437,6 +506,13 @@ CREATE UNIQUE INDEX ix_qr_nonce_v2 ON public.qr_links USING btree (nonce) WHERE 
 
 
 --
+-- Name: ix_qr_nonce_v3; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ix_qr_nonce_v3 ON public.qr_links USING btree (nonce) WHERE ((token_version)::text = 'v3'::text);
+
+
+--
 -- Name: ix_tip_goals_employee_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -448,6 +524,44 @@ CREATE INDEX ix_tip_goals_employee_id ON public.tip_goals USING btree (employee_
 --
 
 CREATE UNIQUE INDEX uq_goal_active_employee ON public.tip_goals USING btree (employee_id) WHERE (active IS TRUE);
+
+
+--
+-- Name: uq_qr_v3_receipt; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_qr_v3_receipt ON public.qr_links USING btree (mecrhant_id, receipt_id) WHERE ((token_version)::text = 'v3'::text);
+
+
+--
+-- Name: uq_qr_v3_receipt_number; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_qr_v3_receipt_number ON public.qr_links USING btree (mecrhant_id, receipt_number) WHERE ((token_version)::text = 'v3'::text);
+
+
+--
+-- Name: audit_events audit_events_merchant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_events
+    ADD CONSTRAINT audit_events_merchant_id_fkey FOREIGN KEY (merchant_id) REFERENCES public.merchants(merchant_id);
+
+
+--
+-- Name: audit_events audit_events_payment_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_events
+    ADD CONSTRAINT audit_events_payment_id_fkey FOREIGN KEY (payment_id) REFERENCES public.payments(payment_id);
+
+
+--
+-- Name: audit_events audit_events_qr_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_events
+    ADD CONSTRAINT audit_events_qr_id_fkey FOREIGN KEY (qr_id) REFERENCES public.qr_links(qr_id);
 
 
 --
@@ -544,4 +658,4 @@ ALTER TABLE ONLY public.tip_goals
 
 
 CREATE TABLE public.alembic_version (version_num varchar(32) NOT NULL PRIMARY KEY);
-INSERT INTO public.alembic_version (version_num) VALUES ('0007_employee_qr');
+INSERT INTO public.alembic_version (version_num) VALUES ('0008_receipt_payments');

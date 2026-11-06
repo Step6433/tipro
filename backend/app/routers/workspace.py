@@ -45,13 +45,13 @@ async def employee(employee_id: int, db: Db, user: User):
 @router.post('/employees', status_code=201)
 async def create_employee(body: EmployeeInput, db: Db, user: User):
     require_role(user, 'merchant')
-    e = Employee(merchant_id=user.merchant_id, name=body.name, title=body.role, position='worker', active=body.active, invite_nonce=secrets.token_urlsafe(24), invite_expires_at=utcnow()+timedelta(days=7), payment_details='')
+    e = Employee(merchant_id=user.merchant_id, name=body.name, title=body.role, position='worker', active=body.active, invite_nonce=secrets.token_urlsafe(24), invite_expires_at=utcnow()+timedelta(days=7), payment_details=body.payment_details)
     db.add(e); await db.flush(); result = employee_view(e, [], True, True); await db.commit(); return result
 
 @router.patch('/employees/{employee_id}')
 async def edit_employee(employee_id: int, body: EmployeeInput, db: Db, user: User):
     require_role(user, 'merchant'); e = await scoped_employee(db, user, employee_id, lock=True)
-    e.name=body.name; e.title=body.role; e.active=body.active
+    e.name=body.name; e.title=body.role; e.active=body.active; e.payment_details=body.payment_details
     result=employee_view(e, await employee_goals(db, [e]), True, True)
     await db.commit(); return result
 
@@ -113,7 +113,7 @@ async def settings(merchant_id: int,body: SettingsInput,db: Db,user: User):
     values=body.model_dump(exclude_unset=True)
     if values.get('currency') is not None and values['currency'] not in CURRENCIES:raise ApiError('Неподдерживаемая валюта.')
     percentages=values.get('tip_percentages')
-    if percentages is not None and (len(set(percentages))!=len(percentages) or any(p<1 or p>100 for p in percentages)):raise ApiError('Проценты должны быть уникальными числами от 1 до 100.')
+    if percentages is not None and (len(set(percentages))!=len(percentages) or any(p<0 or p>50 for p in percentages)):raise ApiError('Проценты должны быть уникальными числами от 0 до 50.')
     for field,value in values.items():
         if value is not None or field=='description':setattr(m,field,value)
     await db.commit();return merchant_view(m)

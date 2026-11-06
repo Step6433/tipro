@@ -24,7 +24,7 @@ try{
   assert.equal(before.user.role,'merchant')
   const employee=before.employees.find(e=>e.registered)
   assert.ok(employee,'A demo employee must exist; run the seed.')
-  const qr=before.qrs.find(q=>q.active&&q.employeeId===employee.id) || await api.createQr({employeeId:employee.id,label:'Проверка оплаты',currency:before.currency})
+  const qr=before.qrs.find(q=>q.active&&q.employeeId===employee.id) || await api.createQr({employeeId:employee.id,label:'Проверка оплаты',billAmount:'1000',currency:before.currency})
   const totalBefore=before.analytics.totals[0].total
   await api.logout()
   await api.login({email:'worker11@tipro.example.com',password})
@@ -42,7 +42,7 @@ try{
   try {
     Object.defineProperty(globalThis,'crypto',{configurable:true,value:{getRandomValues:browserCrypto.getRandomValues.bind(browserCrypto)}})
     assert.equal(globalThis.crypto.randomUUID,undefined)
-    payment=await api.pay({qrId:qr.id,employeeId:employee.id,amount:'12.50',currency:'THB'})
+    payment=await api.pay({qrId:qr.id,receiptId:qr.receipt.id,employeeId:employee.id,amount:'12.50',currency:'THB'})
   } finally {
     if(cryptoDescriptor)Object.defineProperty(globalThis,'crypto',cryptoDescriptor)
     else delete globalThis.crypto

@@ -64,7 +64,7 @@ async def login(body: Login, response: Response, db: Db):
     if user.merchant_id and not user.platform_admin:
         m = await db.get(Merchant, user.merchant_id)
         if not m or (m.status.upper() != 'ACTIVE' and not (m.status.upper() == 'PENDING' and role_of(user) == 'merchant')):
-            raise ApiError('Ресторан недоступен.', 'UNAUTHORIZED', 403)
+            raise ApiError('Ресторан недоступен.', 'MERCHANT_BLOCKED' if m and m.status.upper()=='BLOCKED' else 'UNAUTHORIZED', 403)
     result = await issue_session(db, user)
     result['session'].update(await approval_details(db, user))
     await db.commit(); set_cookie(response, result['accessToken'])

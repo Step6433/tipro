@@ -5,7 +5,7 @@ from sqlalchemy.dialects.postgresql import ENUM, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 POSITION = ENUM('visitor', 'worker', 'manager', name='Position_enum', create_type=False)
-PAYMENT_STATUS = ENUM('SUCCESS', 'DECLINED', 'PENDING', 'CANCELED', name='Payment_status', create_type=False)
+PAYMENT_STATUS = ENUM('SUCCESS', 'DECLINED', 'PENDING', 'CANCELED', 'CREATED', name='Payment_status', create_type=False)
 
 def utcnow():
     return datetime.now(timezone.utc)
@@ -48,7 +48,7 @@ class Employee(Base):
     invite_consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
-    __table_args__ = (Index('ix_employees_merchant_active', 'merchant_id', 'active'),)
+    __table_args__ = (Index('ix_employees_merchant_active', 'merchant_id', 'active'), CheckConstraint("payment_details = '' OR payment_details ~ '^[*]{4}[0-9]{4}$'", name='ck_employee_payment_mask'))
 
 class Goal(Base):
     __tablename__ = 'tip_goals'
@@ -75,7 +75,7 @@ class QrLink(Base):
     nonce: Mapped[str] = mapped_column(Text)
     exp: Mapped[str] = mapped_column(Text)
     signature: Mapped[str] = mapped_column(Text)
-    token_version: Mapped[str] = mapped_column(String(16), default='v2')
+    token_version: Mapped[str] = mapped_column(String(16), default='v3')
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -88,6 +88,10 @@ class QrLink(Base):
     __table_args__ = (
         Index('ix_qr_nonce_v1', 'nonce', unique=True, postgresql_where=token_version == 'v1'),
         Index('ix_qr_nonce_v2', 'nonce', unique=True, postgresql_where=token_version == 'v2'),
+        Index('ix_qr_nonce_v3', 'nonce', unique=True, postgresql_where=token_version == 'v3'),
+        Index('uq_qr_v3_receipt', 'mecrhant_id', 'receipt_id', unique=True, postgresql_where=token_version == 'v3'),
+        Index('uq_qr_v3_receipt_number', 'mecrhant_id', 'receipt_number', unique=True, postgresql_where=token_version == 'v3'),
+        CheckConstraint("token_version != 'v3' OR (employee_id IS NOT NULL AND receipt_id > 0 AND receipt_number IS NOT NULL AND bill_amount IS NOT NULL AND bill_amount > 0 AND bill_amount <= 1000000 AND expires_at IS NOT NULL AND exp != '0' AND expires_at = created_at + INTERVAL '24 hours')", name='ck_qr_v3_receipt'),
         CheckConstraint("token_version != 'v2' OR (employee_id IS NOT NULL AND expires_at IS NOT NULL AND exp != '0' AND expires_at = created_at + INTERVAL '24 hours')", name='ck_qr_v2_employee_deadline'),
     )
 
@@ -134,6 +138,19 @@ class WebhookEvent(Base):
     digest: Mapped[str] = mapped_column(String(64))
     payment_id: Mapped[int] = mapped_column(ForeignKey('payments.payment_id'))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+class AuditEvent(Base):
+    __tablename__ = 'audit_events'
+    event_id: Mapped[int] = mapped_column(Integer, Identity(always=True), primary_key=True)
+    payment_id: Mapped[int | None] = mapped_column(ForeignKey('payments.payment_id'), index=True)
+    qr_id: Mapped[int | None] = mapped_column(ForeignKey('qr_links.qr_id'))
+    merchant_id: Mapped[int] = mapped_column(ForeignKey('merchants.merchant_id'), index=True)
+    action: Mapped[str] = mapped_column(String(40))
+    from_status: Mapped[str | None] = mapped_column(String(20))
+    to_status: Mapped[str] = mapped_column(String(20))
+    amount_total: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))
+    actor: Mapped[str] = mapped_column(String(80))
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 class SeedRecord(Base):
     __tablename__ = 'demo_seed_records'

@@ -13,7 +13,7 @@ from app.core.deps import Db, User
 from app.core.errors import ApiError
 from app.models import Payment, Employee, WebhookEvent
 from app.schemas.requests import PaymentInput, WebhookInput
-from app.services.payments import create_payment, public_payment, reconcile, transition, advisory_lock
+from app.services.payments import create_payment, public_payment, reconcile, transition, advisory_lock, confirm_payment
 from app.services.scopes import payment_conditions
 from app.services.views import payment_view, STATUS
 
@@ -29,10 +29,15 @@ async def create(token: str,body: PaymentInput,db: Db,response: Response,idempot
 async def status(token: str,db: Db):
     p=await public_payment(db,token);await reconcile(db,p);result=payment_view(p,True);await db.commit();return result
 
+@router.post('/public/payments/{token}/confirm')
+async def confirm(token: str,db: Db):
+    p=await public_payment(db,token);await confirm_payment(db,p)
+    result=payment_view(p,True);await db.commit();return result
+
 @router.post('/public/payments/{token}/cancel')
 async def cancel(token: str,db: Db):
     p=await public_payment(db,token);await reconcile(db,p)
-    if p.status=='PENDING':await transition(db,p,'CANCELED')
+    if p.status!='CANCELED':await transition(db,p,'CANCELED','client')
     result=payment_view(p,True);await db.commit();return result
 
 @router.get('/payments')
@@ -54,10 +59,10 @@ async def export(db: Db,user: User,currency: str|None=None,start: date|None=None
             return "'"+value if value.startswith(('=','+','-','@','\t','\r')) else value
         buffer=io.StringIO();csv.writer(buffer,delimiter=';').writerow([safe(v) for v in values]);return buffer.getvalue()
     async def generate():
-        yield '\ufeff'+row(['ID','Дата UTC','Сотрудник','Чаевые','Валюта','Статус'])
+        yield '\ufeff'+row(['ID','Дата UTC','Сотрудник','Сумма чека','Итого','Чаевые','Валюта','Статус'])
         result=await db.stream(stmt.execution_options(yield_per=200))
         async for payment,name in result:
-            yield row([payment.payment_id,payment.created_at.isoformat() if payment.created_at else '',name,payment.tip,payment.currency,STATUS[payment.status]])
+            yield row([payment.payment_id,payment.created_at.isoformat() if payment.created_at else '',name,payment.amount,payment.amount+payment.tip,payment.tip,payment.currency,STATUS[payment.status]])
     return StreamingResponse(generate(),media_type='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="tipro-payments.csv"'})
 
 @router.post('/webhooks/demo')
@@ -77,7 +82,8 @@ async def webhook(request: Request,db: Db,x_webhook_timestamp: str=Header(),x_we
         return {'ok':True,'duplicate':True}
     payment=await db.scalar(select(Payment).where(Payment.external_id==body.external_id,Payment.provider=='demo').with_for_update())
     if not payment:raise ApiError('Платёж не найден.','NOT_FOUND',404)
-    if payment.tip!=body.amount or payment.currency!=body.currency:raise ApiError('Сумма или валюта подтверждения не совпадает.')
+    if payment.status=='CREATED':raise ApiError('Платёж ещё не подтверждён клиентом.','CONFLICT',409)
+    if payment.amount+payment.tip!=body.amount or payment.currency!=body.currency:raise ApiError('Сумма или валюта подтверждения не совпадает.')
     await transition(db,payment,{'success':'SUCCESS','failed':'DECLINED','cancelled':'CANCELED'}[body.status])
     db.add(WebhookEvent(event_id=body.event_id,digest=digest,payment_id=payment.payment_id));await db.commit()
     return {'ok':True,'duplicate':False,'status':STATUS[payment.status],'errorCode':payment.failure_reason}
