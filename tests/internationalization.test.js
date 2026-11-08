@@ -2,6 +2,7 @@ import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'vite'
 import { createSSRApp, h } from 'vue'
+import { createPinia } from 'pinia'
 import { renderToString } from '@vue/server-renderer'
 
 const vite = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' })
@@ -40,7 +41,7 @@ test('language changes messages, dates and numeric conventions without changing 
 test('landing page actually renders English and Chinese translations', async () => {
   const { default: Home } = await vite.ssrLoadModule('/src/views/HomeView.vue')
   function makeApp() {
-    return createSSRApp(Home).use(i18n.default).component('RouterLink', { setup(_, { slots }) { return () => h('a', {}, slots.default?.()) } })
+    return createSSRApp(Home).use(createPinia()).use(i18n.default).component('RouterLink', { setup(_, { slots }) { return () => h('a', {}, slots.default?.()) } })
   }
   i18n.setLocale('en', false)
   const english = await renderToString(makeApp())

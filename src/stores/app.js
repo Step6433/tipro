@@ -33,12 +33,13 @@ export const useAppStore = defineStore('app', () => {
     pendingLoad = request
     return request
   }
-  async function authenticate(method, values) { const next = await api[method](values); clear(); session.value = next; if (!awaitingApproval.value) await load() }
-  async function logout() { await api.logout(); clear(); session.value = null }
+  async function authenticate(method, values) { const next = await api[method](values); clear(); session.value = next; ready.value = true; if (!awaitingApproval.value) await load() }
+  async function logout() { await api.logout(); clear(); session.value = null; ready.value = true }
   async function refreshSession() {
     const next = await api.session()
     if (next?.userId !== session.value?.userId) clear()
     session.value = next
+    ready.value = true
     if (next && !awaitingApproval.value) await load()
   }
   const employeeName = id => employees.value.find(e => e.id === id)?.name || t('Сотрудник')

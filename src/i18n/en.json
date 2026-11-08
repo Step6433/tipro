@@ -458,5 +458,6 @@
   "Сотрудник не соответствует QR-коду.": "The employee does not match this QR.",
   "Платёж уже передан в обработку; отмена недоступна.": "The payment is processing and can no longer be canceled.",
   "QR-код недействителен.": "This QR is invalid.",
-  "На следующем шаге выберите сумму чаевых.": "Choose your tip amount on the next step."
+  "На следующем шаге выберите сумму чаевых.": "Choose your tip amount on the next step.",
+  "Вернуться в кабинет": "Back to dashboard"
 }

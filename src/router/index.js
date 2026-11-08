@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { watch } from 'vue'
 import { locale, t } from '../i18n'
-import { homeForRole } from '../utils/roles'
+import { checkNavigation } from './guard'
 const router = createRouter({ history: createWebHistory(), scrollBehavior: () => ({ top: 0 }), routes: [
   { path: '/', component: () => import('../views/HomeView.vue'), meta: { title: 'Чаевые для команды' } },
   { path: '/login', component: () => import('../views/AuthView.vue'), meta: { title: 'Вход' } },
@@ -23,18 +23,7 @@ const router = createRouter({ history: createWebHistory(), scrollBehavior: () =>
   ] },
   { path: '/:pathMatch(.*)*', component: () => import('../views/NotFoundView.vue'), meta: { title: 'Страница не найдена' } },
 ] })
-router.beforeEach(async to => {
-  const store = useAppStore()
-  try {
-    // Check the persisted account on each private navigation, including changes in another tab.
-    if (to.meta.auth) await store.refreshSession()
-    else await store.init()
-  } catch { if (to.meta.auth) return '/login' }
-  if (to.meta.auth && !store.session) return { path: '/login', query: { redirect: to.fullPath } }
-  if (to.meta.auth && store.awaitingApproval && to.path !== '/approval') return '/approval'
-  if (to.path === '/approval' && store.session && !store.awaitingApproval) return homeForRole(store.session.role)
-  if (to.meta.roles && !to.meta.roles.includes(store.session?.role)) return homeForRole(store.session?.role)
-})
+router.beforeEach(to => checkNavigation(to, useAppStore()))
 function updateTitle() { document.title = `${t(router.currentRoute.value.meta.title || 'Tipro')} · Tipro` }
 router.afterEach(updateTitle)
 watch(locale, updateTitle)
